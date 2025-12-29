@@ -5,7 +5,7 @@ services:
     build:
       context: ..
       dockerfile: ./docker/Dockerfile.prod
-    container_name: hntv-api-prod
+    container_name: hntv-api
     ports:
       - "5002:5002"
     environment:

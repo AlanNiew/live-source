@@ -2,6 +2,7 @@ import hashlib
 import time
 import requests
 from flask import Flask, request as flask_request, jsonify, abort
+from flask_caching import Cache
 import os
 from dotenv import load_dotenv
 
@@ -9,6 +10,13 @@ from dotenv import load_dotenv
 load_dotenv()
 # 创建Flask应用
 app = Flask(__name__)
+
+# 配置缓存
+app.config['CACHE_TYPE'] = 'simple'  # 使用简单缓存
+app.config['CACHE_DEFAULT_TIMEOUT'] = 600  # 默认10分钟缓存
+
+# 创建缓存实例
+cache = Cache(app)
 
 # 设置认证令牌，可以从环境变量获取，也可以直接设置
 API_TOKEN = os.environ.get('API_TOKEN', 'hntv-secret-token-2025')
@@ -61,6 +69,116 @@ def get_hntv_live_list():
     return response
 
 
+@cache.memoize(timeout=600)
+def get_hntv_epg_data(cid, date_timestamp):
+    """
+    获取EPG节目数据
+    :param cid: 频道ID
+    :param date_timestamp: 日期时间戳（当天零点）
+    """
+    url = f"https://pubmod.hntv.tv/program/getAuth/vod/originStream/program/{cid}/{date_timestamp}"
+    
+    # 生成当前时间戳和签名
+    timestamp = str(int(time.time()))
+    sign = calculate_sha256_with_timestamp(SECRET_KEY)
+    
+    headers = {
+        'timestamp': timestamp,
+        'sign': sign
+    }
+    
+    response = requests.get(url, headers=headers)
+    return response
+
+@cache.cached(timeout=600, key_prefix='transList2XML')
+def transList2XML():
+    response = get_hntv_live_list()
+    if response.status_code != 200:
+        return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
+    
+    data = response.json()
+    
+    # 构建EPG XML内容
+    xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv">\n'
+    
+
+    n = 0
+    # 如果数据结构不同，直接遍历响应数据
+    if isinstance(data, list):
+        for item in data:
+            name = item.get('name', 'Unknown')
+            cid = item.get('cid')
+            n+=1
+            if n>3:
+                break
+            if cid is not None:
+                # 添加频道信息
+                xml_content += f'  <channel id="{name}">\n    <display-name lang="zh">{name}</display-name>\n   </channel>\n'
+
+                # 获取EPG节目数据
+                import datetime
+                today = datetime.date.today()
+                zero_time = datetime.datetime.combine(today, datetime.time.min)
+                date_timestamp = int(zero_time.timestamp())
+
+                epg_response = get_hntv_epg_data(cid, date_timestamp)
+                if epg_response.status_code == 200:
+                    epg_data = epg_response.json()
+                    if 'programs' in epg_data and isinstance(epg_data['programs'], list):
+                        for program in epg_data['programs']:
+                            title = program.get('title', 'Unknown')
+                            begin_time = program.get('beginTime', '')
+                            end_time = program.get('endTime', '')
+
+                            # 将时间戳转换为EPG格式 (YYYYMMDDHHMMSS +0800)
+                            begin_time_formatted = format_timestamp_for_epg(begin_time)
+                            end_time_formatted = format_timestamp_for_epg(end_time)
+
+                            xml_content += f'  <programme start="{begin_time_formatted}" stop="{end_time_formatted}" channel="{name}">\n    <title lang="zh">{title}</title>\n  </programme>\n'
+
+    xml_content += '</tv>'
+    
+    return xml_content
+
+
+def format_timestamp_for_epg(timestamp_str):
+    """
+    将时间戳格式化为EPG格式 (YYYYMMDDHHMMSS +0800)
+    :param timestamp_str: 时间戳字符串
+    :return: 格式化后的时间字符串
+    """
+    import datetime
+    
+    try:
+        timestamp = int(timestamp_str)
+        dt = datetime.datetime.fromtimestamp(timestamp)
+        return dt.strftime('%Y%m%d%H%M%S +0800')
+    except (ValueError, TypeError):
+        # 如果转换失败，返回当前时间的格式化字符串
+        return datetime.datetime.now().strftime('%Y%m%d%H%M%S +0800')
+
+@cache.cached(timeout=600, key_prefix='transList2M3U')
+def transList2M3U():
+    response = get_hntv_live_list()
+    if response.status_code != 200:
+        return "#EXTM3U\n# Error: Failed to fetch data"
+    
+    data = response.json()
+    m3u_content = "#EXTM3U\n\n"
+    # 如果数据结构不同，直接遍历响应数据
+    if isinstance(data, list):
+        for item in data:
+            name = item.get('name', 'Unknown')
+            cid = item.get('cid')
+            streams = item.get('video_streams') or item.get('streams', [])
+            if streams:
+                stream_url = streams[0]
+                m3u_content += f'#EXTINF:-1 tvg-id="{cid}" tvg-name="{name}" group-title="河南卫视",{name}\n'
+                m3u_content += f'{stream_url}\n\n'
+    
+    return m3u_content
+
+
 @app.route('/api/proxy', methods=['GET'])
 def proxy_api():
     """
@@ -91,6 +209,53 @@ def proxy_api():
             'status': 'error',
             'message': str(e)
         }), 500
+
+@app.route('/api/live.m3u8', methods=['GET'])
+def generate_m3u():
+    """
+    生成M3U格式的直播列表，需要令牌认证
+    """
+    # 从请求头或查询参数中获取令牌
+    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
+    
+    if not token:
+        abort(401, description="Missing token")
+    
+    # 验证令牌
+    if not verify_token(token.replace('Bearer ', '')):
+        abort(401, description="Invalid token")
+    
+    try:
+        m3u_content = transList2M3U()
+        
+        # 返回M3U格式内容
+        return m3u_content, 200, {'Content-Type': 'application/x-mpegURL'}
+    except Exception as e:
+        return f"#EXTM3U\n# Error: {str(e)}", 500, {'Content-Type': 'application/x-mpegURL'}
+
+@app.route('/api/live.xml', methods=['GET'])
+def generate_xml():
+    """
+    生成XML格式的直播列表，需要令牌认证
+    """
+    # 从请求头或查询参数中获取令牌
+    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
+
+    if not token:
+        abort(401, description="Missing token")
+
+    # 验证令牌
+    if not verify_token(token.replace('Bearer ', '')):
+        abort(401, description="Invalid token")
+
+    try:
+        xml_content = transList2XML()
+
+        # 返回XML格式内容
+        return xml_content, 200, {'Content-Type': 'application/xml'}
+    except Exception as e:
+        return f'<?xml version="1.0" encoding="UTF-8"?>\n<error>{str(e)}</error>', 500, {
+            'Content-Type': 'application/xml'}
 
 
 @app.route('/api/generate-sign', methods=['GET'])
@@ -137,4 +302,4 @@ if __name__ == '__main__':
 
     # 启动Flask应用
     print("\n启动Web API服务...")
-    app.run(debug=False, host='0.0.0.0', port=5002)
+    app.run(debug=True, host='0.0.0.0', port=5002)
