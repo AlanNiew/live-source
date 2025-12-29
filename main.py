@@ -1,7 +1,7 @@
 import hashlib
 import time
 import requests
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request as flask_request, jsonify, abort
 import os
 from dotenv import load_dotenv
 
@@ -41,7 +41,7 @@ def calculate_sha256_with_timestamp(secret_key="6ca114a836ac7d73"):
     return sha256_hash
 
 
-def make_api_request():
+def get_hntv_live_list():
     """
     封装API请求，使用时间戳和签名
     """
@@ -67,7 +67,7 @@ def proxy_api():
     API代理端点，需要令牌认证
     """
     # 从请求头或查询参数中获取令牌
-    token = request.headers.get('Authorization') or request.args.get('token')
+    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
     
     if not token:
         abort(401, description="Missing token")
@@ -78,7 +78,7 @@ def proxy_api():
     
     try:
         # 调用API请求函数
-        response = make_api_request()
+        response = get_hntv_live_list()
         
         # 返回响应
         return jsonify({
@@ -99,7 +99,7 @@ def generate_sign():
     生成签名的端点，需要令牌认证
     """
     # 从请求头或查询参数中获取令牌
-    token = request.headers.get('Authorization') or request.args.get('token')
+    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
     
     if not token:
         abort(401, description="Missing token")
@@ -137,4 +137,4 @@ if __name__ == '__main__':
 
     # 启动Flask应用
     print("\n启动Web API服务...")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5002)
