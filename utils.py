@@ -115,12 +115,12 @@ class XmlUtils:
         try:
             response = ApiUtils.get_hntv_live_list()
             if response.status_code != 200:
-                xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
+                xml_content = '<?xml version="1.0" encoding="UTF-8"?><tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew"></tv>'
             else:
                 data = response.json()
-                
+
                 # 构建EPG XML内容
-                xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv">\n'
+                xml_content = '<?xml version="1.0" encoding="UTF-8"?><tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew">\n'
                 
                 # 如果数据结构不同，直接遍历响应数据
                 if isinstance(data, list):
@@ -129,7 +129,7 @@ class XmlUtils:
                         cid = item.get('cid')
                         if cid is not None:
                             # 添加频道信息
-                            xml_content += f'  <channel id="{cid}">\n    <display-name lang="zh">{name}</display-name>\n   </channel>\n'
+                            xml_content += f'<channel id="{cid}">\n<display-name lang="zh">{name}</display-name>\n</channel>\n'
 
                             # 获取EPG节目数据
                             today = datetime.date.today()
@@ -149,7 +149,7 @@ class XmlUtils:
                                         begin_time_formatted = TimeUtils.format_timestamp_for_epg(begin_time)
                                         end_time_formatted = TimeUtils.format_timestamp_for_epg(end_time)
 
-                                        xml_content += f'  <programme start="{begin_time_formatted}" stop="{end_time_formatted}" channel="{cid}">\n    <title lang="zh">{title}</title>\n  </programme>\n'
+                                        xml_content += f'<programme start="{begin_time_formatted}" stop="{end_time_formatted}" channel="{cid}">\n<title lang="zh">{title}</title>\n</programme>\n'
 
                 xml_content += '</tv>'
             
@@ -166,7 +166,7 @@ class XmlUtils:
         except Exception as e:
             print(f"获取并保存XML数据时出错: {str(e)}")
             # 返回默认XML内容
-            return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
+            return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew"></tv>'
 
     @staticmethod
     def load_xml_from_file():
@@ -185,7 +185,7 @@ class XmlUtils:
                 return XmlUtils.get_and_save_xml_data()
         except Exception as e:
             print(f"从文件加载XML数据时出错: {str(e)}")
-            return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
+            return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew"></tv>'
 
     @staticmethod
     def transList2XML():
