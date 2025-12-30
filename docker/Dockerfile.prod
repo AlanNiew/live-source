@@ -16,5 +16,5 @@ COPY . .
 # 暴露应用端口
 EXPOSE 5002
 
-# 启动命令
-CMD ["python", "main.py"]
+# 启动命令 - 使用Gunicorn作为WSGI服务器
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "main:app"]
