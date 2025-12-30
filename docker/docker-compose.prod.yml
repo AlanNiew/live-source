@@ -13,3 +13,9 @@ services:
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs
+    networks:
+      - hntv-network
+
+networks:
+  hntv-network:
+    driver: bridge
