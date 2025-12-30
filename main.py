@@ -1,10 +1,16 @@
 import hashlib
 import time
 import requests
-from flask import Flask, request as flask_request, jsonify, abort
+from flask import Flask, request as flask_request, jsonify, abort, send_file
 from flask_caching import Cache
 import os
 from dotenv import load_dotenv
+import gzip
+import json
+import threading
+import datetime
+import atexit
+import signal
 
 # 加载环境变量
 load_dotenv()
@@ -17,6 +23,14 @@ app.config['CACHE_DEFAULT_TIMEOUT'] = 600  # 默认10分钟缓存
 
 # 创建缓存实例
 cache = Cache(app)
+
+# 定义XML数据存储路径
+XML_DATA_DIR = os.path.join(os.path.dirname(__file__), 'xml_data')
+XML_FILE_PATH = os.path.join(XML_DATA_DIR, 'live.xml')
+GZ_FILE_PATH = os.path.join(XML_DATA_DIR, 'live.xml.gz')
+
+# 确保目录存在
+os.makedirs(XML_DATA_DIR, exist_ok=True)
 
 # 设置认证令牌，可以从环境变量获取，也可以直接设置
 API_TOKEN = os.environ.get('API_TOKEN', 'hntv-secret-token-2025')
@@ -69,7 +83,6 @@ def get_hntv_live_list():
     return response
 
 
-@cache.memoize(timeout=600)
 def get_hntv_epg_data(cid, date_timestamp):
     """
     获取EPG节目数据
@@ -90,56 +103,117 @@ def get_hntv_epg_data(cid, date_timestamp):
     response = requests.get(url, headers=headers)
     return response
 
+# 新增函数：获取XML数据并保存为压缩文件
+def get_and_save_xml_data():
+    """
+    获取XML数据并保存到文件，同时生成压缩文件
+    """
+    try:
+        response = get_hntv_live_list()
+        if response.status_code != 200:
+            xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
+        else:
+            data = response.json()
+            
+            # 构建EPG XML内容
+            xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv">\n'
+            
+            # 如果数据结构不同，直接遍历响应数据
+            if isinstance(data, list):
+                for item in data:
+                    name = item.get('name', 'Unknown')
+                    cid = item.get('cid')
+                    if cid is not None:
+                        # 添加频道信息
+                        xml_content += f'  <channel id="{cid}">\n    <display-name lang="zh">{name}</display-name>\n   </channel>\n'
+
+                        # 获取EPG节目数据
+                        import datetime
+                        today = datetime.date.today()
+                        zero_time = datetime.datetime.combine(today, datetime.time.min)
+                        date_timestamp = int(zero_time.timestamp())
+
+                        epg_response = get_hntv_epg_data(cid, date_timestamp)
+                        if epg_response.status_code == 200:
+                            epg_data = epg_response.json()
+                            if 'programs' in epg_data and isinstance(epg_data['programs'], list):
+                                for program in epg_data['programs']:
+                                    title = program.get('title', 'Unknown')
+                                    begin_time = program.get('beginTime', '')
+                                    end_time = program.get('endTime', '')
+
+                                    # 将时间戳转换为EPG格式 (YYYYMMDDHHMMSS +0800)
+                                    begin_time_formatted = format_timestamp_for_epg(begin_time)
+                                    end_time_formatted = format_timestamp_for_epg(end_time)
+
+                                    xml_content += f'  <programme start="{begin_time_formatted}" stop="{end_time_formatted}" channel="{cid}">\n    <title lang="zh">{title}</title>\n  </programme>\n'
+
+            xml_content += '</tv>'
+        
+        # 保存原始XML文件
+        with open(XML_FILE_PATH, 'w', encoding='utf-8') as f:
+            f.write(xml_content)
+        
+        # 生成并保存压缩文件
+        with gzip.open(GZ_FILE_PATH, 'wt', encoding='utf-8') as f:
+            f.write(xml_content)
+        
+        print(f"XML数据已保存到 {XML_FILE_PATH} 和 {GZ_FILE_PATH}")
+        return xml_content
+    except Exception as e:
+        print(f"获取并保存XML数据时出错: {str(e)}")
+        # 返回默认XML内容
+        return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
+
+def load_xml_from_file():
+    """
+    从文件加载XML数据
+    """
+    try:
+        if os.path.exists(GZ_FILE_PATH):
+            with gzip.open(GZ_FILE_PATH, 'rt', encoding='utf-8') as f:
+                return f.read()
+        elif os.path.exists(XML_FILE_PATH):
+            with open(XML_FILE_PATH, 'r', encoding='utf-8') as f:
+                return f.read()
+        else:
+            # 如果文件不存在，获取并保存数据
+            return get_and_save_xml_data()
+    except Exception as e:
+        print(f"从文件加载XML数据时出错: {str(e)}")
+        return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
+
+def schedule_daily_xml_update():
+    """
+    定时每天更新XML数据
+    """
+    def update_xml_daily():
+        while True:
+            try:
+                # 计算到明天零点的时间间隔（秒）
+                now = datetime.datetime.now()
+                tomorrow = now + datetime.timedelta(days=1)
+                next_midnight = tomorrow.replace(hour=3, minute=30, second=0, microsecond=0)
+                time_to_wait = (next_midnight - now).total_seconds()
+                
+                print(f"等待 {time_to_wait} 秒后更新XML数据...")
+                time.sleep(time_to_wait)
+                
+                # 获取并保存XML数据
+                get_and_save_xml_data()
+                print("XML数据已更新")
+                
+            except Exception as e:
+                print(f"定时更新XML数据时出错: {str(e)}")
+    
+    # 启动定时更新线程
+    scheduler_thread = threading.Thread(target=update_xml_daily, daemon=True)
+    scheduler_thread.start()
+
 @cache.cached(timeout=600, key_prefix='transList2XML')
 def transList2XML():
-    response = get_hntv_live_list()
-    if response.status_code != 200:
-        return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv"></tv>'
-    
-    data = response.json()
-    
-    # 构建EPG XML内容
-    xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-api" generator-info-url="https://pubmod.hntv.tv">\n'
-    
-
-    n = 0
-    # 如果数据结构不同，直接遍历响应数据
-    if isinstance(data, list):
-        for item in data:
-            name = item.get('name', 'Unknown')
-            cid = item.get('cid')
-            n+=1
-            if n>3:
-                break
-            if cid is not None:
-                # 添加频道信息
-                xml_content += f'  <channel id="{name}">\n    <display-name lang="zh">{name}</display-name>\n   </channel>\n'
-
-                # 获取EPG节目数据
-                import datetime
-                today = datetime.date.today()
-                zero_time = datetime.datetime.combine(today, datetime.time.min)
-                date_timestamp = int(zero_time.timestamp())
-
-                epg_response = get_hntv_epg_data(cid, date_timestamp)
-                if epg_response.status_code == 200:
-                    epg_data = epg_response.json()
-                    if 'programs' in epg_data and isinstance(epg_data['programs'], list):
-                        for program in epg_data['programs']:
-                            title = program.get('title', 'Unknown')
-                            begin_time = program.get('beginTime', '')
-                            end_time = program.get('endTime', '')
-
-                            # 将时间戳转换为EPG格式 (YYYYMMDDHHMMSS +0800)
-                            begin_time_formatted = format_timestamp_for_epg(begin_time)
-                            end_time_formatted = format_timestamp_for_epg(end_time)
-
-                            xml_content += f'  <programme start="{begin_time_formatted}" stop="{end_time_formatted}" channel="{name}">\n    <title lang="zh">{title}</title>\n  </programme>\n'
-
-    xml_content += '</tv>'
-    
-    return xml_content
-
+    # 使用从文件加载的XML数据
+    return load_xml_from_file()
 
 def format_timestamp_for_epg(timestamp_str):
     """
@@ -165,7 +239,6 @@ def transList2M3U():
     
     data = response.json()
     m3u_content = "#EXTM3U\n\n"
-    # 如果数据结构不同，直接遍历响应数据
     if isinstance(data, list):
         for item in data:
             name = item.get('name', 'Unknown')
@@ -258,6 +331,32 @@ def generate_xml():
             'Content-Type': 'application/xml'}
 
 
+@app.route('/api/live_compressed.xml', methods=['GET'])
+def generate_compressed_xml():
+    """
+    生成压缩的XML格式的直播列表，需要令牌认证
+    """
+    # 从请求头或查询参数中获取令牌
+    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
+
+    if not token:
+        abort(401, description="Missing token")
+
+    # 验证令牌
+    if not verify_token(token.replace('Bearer ', '')):
+        abort(401, description="Invalid token")
+
+    try:
+        # 检查压缩文件是否存在，如果不存在则生成
+        if not os.path.exists(GZ_FILE_PATH):
+            get_and_save_xml_data()
+        
+        # 返回压缩的XML文件
+        return send_file(GZ_FILE_PATH, as_attachment=True, download_name='live.xml.gz', mimetype='application/gzip')
+    except Exception as e:
+        return f'<?xml version="1.0" encoding="UTF-8"?>\n<error>{str(e)}</error>', 500, {
+            'Content-Type': 'application/xml'}
+
 @app.route('/api/generate-sign', methods=['GET'])
 def generate_sign():
     """
@@ -300,6 +399,14 @@ def health_check():
 # 按装订区域中的绿色按钮以运行脚本。
 if __name__ == '__main__':
 
+    # 启动定时XML更新任务
+    schedule_daily_xml_update()
+    print("定时XML更新任务已启动")
+    
+    # 在应用启动时获取一次XML数据
+    print("正在获取初始XML数据...")
+    get_and_save_xml_data()
+    
     # 启动Flask应用
     print("\n启动Web API服务...")
     app.run(debug=True, host='0.0.0.0', port=5002)
