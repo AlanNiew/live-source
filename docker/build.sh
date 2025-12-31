@@ -17,6 +17,19 @@ if ! docker info > /dev/null 2>&1; then
   exit 1
 fi
 
+# 清理旧的镜像和容器
+echo "清理旧的hntv-api容器和镜像..."
+
+# 停止并删除正在运行的容器
+docker stop hntv-api 2>/dev/null || true
+docker rm hntv-api 2>/dev/null || true
+
+# 删除旧的镜像
+docker rmi hntv-api 2>/dev/null || true
+
+echo "旧的容器和镜像已清理完成"
+echo ""
+
 # 构建Docker镜像
 echo "正在构建Docker镜像..."
 docker build -f ./Dockerfile.prod -t hntv-api ..
@@ -29,18 +42,5 @@ fi
 echo "Docker镜像构建成功！"
 echo ""
 
-# 可选：构建完成后运行容器
-read -p "是否立即运行容器？(y/N) " -n 1 -r
-echo ""
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "正在启动容器..."
-    docker-compose -f ./docker-compose.prod.yml up -d
-    if [ $? -eq 0 ]; then
-        echo "容器启动成功！服务将在 http://localhost:5002 上可用"
-    else
-        echo "错误: 容器启动失败！"
-        exit 1
-    fi
-fi
 
 echo "构建完成！"

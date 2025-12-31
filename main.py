@@ -31,13 +31,14 @@ def verify_token(token):
     """
     return TokenUtils.verify_token(token)
 
-def calculate_sha256_with_timestamp(secret_key="6ca114a836ac7d73"):
+def calculate_sha256_with_timestamp(secret_key="6ca114a836ac7d73",timestamp=None):
     """
     将指定字符串与当前时间秒进行sha256计算
+    :param timestamp:
     :param secret_key: 默认为"6ca114a836ac7d73"
     :return: sha256哈希值
     """
-    return CryptoUtils.calculate_sha256_with_timestamp(secret_key)
+    return CryptoUtils.calculate_sha256_with_timestamp(secret_key,timestamp)
 
 def get_hntv_live_list():
     """
@@ -123,18 +124,8 @@ def proxy_api():
 @app.route('/api/live.m3u8', methods=['GET'])
 def generate_m3u():
     """
-    生成M3U格式的直播列表，需要令牌认证
+    生成M3U格式的直播列表
     """
-    # 从请求头或查询参数中获取令牌
-    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
-    
-    if not token:
-        abort(401, description="Missing token")
-    
-    # 验证令牌
-    if not verify_token(token.replace('Bearer ', '')):
-        abort(401, description="Invalid token")
-    
     try:
         m3u_content = transList2M3U()
         
@@ -146,18 +137,8 @@ def generate_m3u():
 @app.route('/api/live.xml', methods=['GET'])
 def generate_xml():
     """
-    生成XML格式的直播列表，需要令牌认证
+    生成XML格式的直播列表
     """
-    # 从请求头或查询参数中获取令牌
-    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
-
-    if not token:
-        abort(401, description="Missing token")
-
-    # 验证令牌
-    if not verify_token(token.replace('Bearer ', '')):
-        abort(401, description="Invalid token")
-
     try:
         xml_content = transList2XML()
 
@@ -168,21 +149,11 @@ def generate_xml():
             'Content-Type': 'application/xml'}
 
 
-@app.route('/api/live_compressed.xml', methods=['GET'])
+@app.route('/api/live.xml.gz', methods=['GET'])
 def generate_compressed_xml():
     """
-    生成压缩的XML格式的直播列表，需要令牌认证
+    生成压缩的XML格式的直播列表
     """
-    # 从请求头或查询参数中获取令牌
-    token = flask_request.headers.get('Authorization') or flask_request.args.get('token')
-
-    if not token:
-        abort(401, description="Missing token")
-
-    # 验证令牌
-    if not verify_token(token.replace('Bearer ', '')):
-        abort(401, description="Invalid token")
-
     try:
         # 检查压缩文件是否存在，如果不存在则生成
         if not os.path.exists(GZ_FILE_PATH):
@@ -211,9 +182,9 @@ def generate_sign():
     
     try:
         # 生成签名
-        sign = calculate_sha256_with_timestamp(SECRET_KEY)
         timestamp = str(int(time.time()))
-        
+        sign = calculate_sha256_with_timestamp(SECRET_KEY,timestamp)
+
         return jsonify({
             'timestamp': timestamp,
             'sign': sign
