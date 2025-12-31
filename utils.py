@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+# 定义GMT+8时区
+GMT8 = datetime.timezone(datetime.timedelta(hours=8))
+
 # 设置认证令牌，可以从环境变量获取，也可以直接设置
 API_TOKEN = os.environ.get('API_TOKEN', 'hntv-secret-token-2025')
 SECRET_KEY = os.environ.get('HNTV_SECRET_KEY', '6ca114a836ac7d73')
@@ -40,21 +43,21 @@ class CryptoUtils:
     """加密工具类"""
     
     @staticmethod
-    def calculate_sha256_with_timestamp(secret_key="6ca114a836ac7d73"):
+    def calculate_sha256_with_timestamp(secret_key="6ca114a836ac7d73",timestamp=str(int(time.time()))):
         """
         将指定字符串与当前时间秒进行sha256计算
+        :param timestamp:
         :param secret_key: 默认为"6ca114a836ac7d73"
         :return: sha256哈希值
         """
         # 获取当前时间的秒数
-        current_time_seconds = int(time.time())
-        
+
         # 将字符串和时间拼接
-        combined_string = secret_key + str(current_time_seconds)
+        combined_string = secret_key + str(timestamp)
         
         # 进行sha256计算
         sha256_hash = hashlib.sha256(combined_string.encode('utf-8')).hexdigest()
-        print(f"当前时间戳: {current_time_seconds}")
+        print(f"加密时间戳: {timestamp}")
         print(f"SHA256哈希值: {sha256_hash}")
         return sha256_hash
 
@@ -71,7 +74,7 @@ class ApiUtils:
         
         # 生成当前时间戳和签名
         timestamp = str(int(time.time()))
-        sign = CryptoUtils.calculate_sha256_with_timestamp(SECRET_KEY)
+        sign = CryptoUtils.calculate_sha256_with_timestamp(SECRET_KEY,timestamp)
         
         headers = {
             'timestamp': timestamp,
@@ -93,7 +96,7 @@ class ApiUtils:
         
         # 生成当前时间戳和签名
         timestamp = str(int(time.time()))
-        sign = CryptoUtils.calculate_sha256_with_timestamp(SECRET_KEY)
+        sign = CryptoUtils.calculate_sha256_with_timestamp(SECRET_KEY,timestamp)
         
         headers = {
             'timestamp': timestamp,
@@ -132,8 +135,8 @@ class XmlUtils:
                             xml_content += f'<channel id="{cid}">\n<display-name lang="zh">{name}</display-name>\n</channel>\n'
 
                             # 获取EPG节目数据
-                            today = datetime.date.today()
-                            zero_time = datetime.datetime.combine(today, datetime.time.min)
+                            today = datetime.datetime.now(tz=GMT8).date()
+                            zero_time = datetime.datetime.combine(today, datetime.time.min, tzinfo=GMT8)
                             date_timestamp = int(zero_time.timestamp())
 
                             epg_response = ApiUtils.get_hntv_epg_data(cid, date_timestamp)
@@ -205,11 +208,11 @@ class TimeUtils:
         """
         try:
             timestamp = int(timestamp_str)
-            dt = datetime.datetime.fromtimestamp(timestamp)
+            dt = datetime.datetime.fromtimestamp(timestamp, tz=GMT8)
             return dt.strftime('%Y%m%d%H%M%S +0800')
         except (ValueError, TypeError):
-            # 如果转换失败，返回当前时间的格式化字符串
-            return datetime.datetime.now().strftime('%Y%m%d%H%M%S +0800')
+            # 如果转换失败，返回当前时间的格式化字符串（使用GMT+8时区）
+            return datetime.datetime.now(tz=GMT8).strftime('%Y%m%d%H%M%S +0800')
 
 
 class M3uUtils:
@@ -247,17 +250,17 @@ class SchedulerUtils:
         def update_xml_daily():
             while True:
                 try:
-                    # 计算到明天零点的时间间隔（秒）
-                    now = datetime.datetime.now()
+                    # 计算到明天零点的时间间隔（秒），使用GMT+8时区
+                    now = datetime.datetime.now(tz=GMT8)
                     tomorrow = now + datetime.timedelta(days=1)
-                    next_midnight = tomorrow.replace(hour=3, minute=30, second=0, microsecond=0)
+                    next_midnight = tomorrow.replace(hour=2, minute=30, second=0, microsecond=0)
                     time_to_wait = (next_midnight - now).total_seconds()
                     
                     print(f"等待 {time_to_wait} 秒后更新XML数据...")
                     time.sleep(time_to_wait)
                     
                     # 获取并保存XML数据
-                    # XmlUtils.get_and_save_xml_data()
+                    XmlUtils.get_and_save_xml_data()
                     print("XML数据已更新")
                     
                 except Exception as e:
