@@ -217,13 +217,14 @@ class TimeUtils:
 
 class M3uUtils:
     """M3U处理工具类"""
-    
+
     @staticmethod
-    def transList2M3U():
+    def get_hntv_only_m3u():
+        """仅返回 hntv 官方频道（聚合失败时的降级路径，保证不比现状更差）"""
         response = ApiUtils.get_hntv_live_list()
         if response.status_code != 200:
             return "#EXTM3U\n# Error: Failed to fetch data"
-        
+
         data = response.json()
         m3u_content = "#EXTM3U\n\n"
         if isinstance(data, list):
@@ -235,8 +236,23 @@ class M3uUtils:
                     stream_url = streams[0]
                     m3u_content += f'#EXTINF:-1 tvg-id="{cid}" tvg-name="{name}" group-title="河南卫视",{name}\n'
                     m3u_content += f'{stream_url}\n\n'
-        
+
         return m3u_content
+
+    @staticmethod
+    def transList2M3U():
+        # 优先返回多源聚合结果（hntv 官方 + 公开源央视/卫视）
+        try:
+            from aggregator import AggregatorUtils
+            aggregated = AggregatorUtils.load_aggregated_m3u()
+            if aggregated and "#EXTM3U" in aggregated:
+                return aggregated
+            print("聚合结果为空，降级为 hntv 官方源")
+        except Exception as e:
+            print(f"读取聚合结果失败，降级为 hntv 官方源: {str(e)}")
+
+        # 降级：仅返回 hntv 官方频道
+        return M3uUtils.get_hntv_only_m3u()
 
 
 class SchedulerUtils:
