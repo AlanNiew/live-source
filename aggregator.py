@@ -13,9 +13,13 @@ load_dotenv()
 from utils import XML_DATA_DIR
 
 # 公开 m3u 源列表（代码常量，与现有 hntv API URL 的硬编码模式一致；只有密钥才进 .env）
-# 第一阶段只接入 iptv-org 的中国区源：实测可拉取，151 个频道，国际大项目最稳定
+# 两个源互补：
+# - iptv-org：央视全（17个），但卫视多为运营商内网IP，公网可达性差
+# - hujingguang：卫视用电视台自有域名（cztv.com/jxtvcn.com.cn 等），公网可达性高
+# 聚合去重时按地址质量评分选优（域名 > 公网IP > 内网IP），自动保留可达性更好的源
 PUBLIC_M3U_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/cn.m3u",
+    "https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u8",
 ]
 
 # 聚合结果落盘缓存路径（供 /api/live.m3u8 读取，避免每次请求都实时拉公开源）
@@ -126,6 +130,33 @@ class AggregatorUtils:
         match = re.search(r'\((\d+)[piK]', name)
         return int(match.group(1)) if match else 0
 
+    # 疑似运营商 IPTV 内网 IP 段前缀（这些段多为移动/电信/联通的 IPTV 专网，
+    # 公网环境通常不可达）。用于地址质量评分，优先选域名等公网可达的流
+    CARRIER_IP_PREFIXES = (
+        '118.', '112.', '111.', '117.', '120.', '183.', '39.', '27.',
+        '125.', '61.', '218.', '211.', '60.', '175.',
+    )
+
+    @staticmethod
+    def score_url(url):
+        """
+        评估流地址的公网可达性质量分，用于同名频道多来源时择优保留
+        :param url: 流地址
+        :return: 质量分（域名=3 > 公网IP=2 > 疑似内网IP=1 > 其他=0）
+        """
+        match = re.match(r'https?://([^\[/:]+)', url)
+        if not match:
+            return 0
+        host = match.group(1)
+        # 域名（含子域）通常指向 CDN/电视台官网，公网可达性最好
+        if not re.match(r'\d+\.\d+\.\d+\.\d+$', host):
+            return 3
+        # 疑似运营商内网 IP
+        if host.startswith(AggregatorUtils.CARRIER_IP_PREFIXES):
+            return 1
+        # 其他公网 IP
+        return 2
+
     @staticmethod
     def filter_and_translate(channels):
         """
@@ -204,16 +235,22 @@ class AggregatorUtils:
                 merged[key] = ch
                 order.append(key)
 
-        # 公开源补充 hntv 没有的频道；同归一化名有多个分辨率时选最高清
-        # _resolution 字段在 filter_and_translate 中已按原始名记录
-        public_best = {}  # key -> (频道, 分辨率)
+        # 公开源补充 hntv 没有的频道；同名多来源时按(地址质量, 分辨率)择优
+        # 地址质量高的（域名 > 公网IP > 内网IP）优先，保证公网可达性
+        public_best = {}  # key -> (频道, 地址质量分, 分辨率)
         for ch in public_channels:
             key = AggregatorUtils.normalize_name(ch["name"])
+            score = AggregatorUtils.score_url(ch["url"])
             res = ch.get("_resolution", 0)
-            if key not in public_best or res > public_best[key][1]:
-                public_best[key] = (ch, res)
+            if key not in public_best:
+                public_best[key] = (ch, score, res)
+            else:
+                _ch, old_score, old_res = public_best[key]
+                # 地址质量更高，或质量相同但分辨率更高，则替换
+                if score > old_score or (score == old_score and res > old_res):
+                    public_best[key] = (ch, score, res)
 
-        for key, (ch, _res) in public_best.items():
+        for key, (ch, _score, _res) in public_best.items():
             if key not in merged:  # 只补充 hntv 没有的
                 merged[key] = ch
                 order.append(key)
