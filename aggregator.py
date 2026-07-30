@@ -24,6 +24,30 @@ AGGREGATED_M3U_PATH = os.path.join(XML_DATA_DIR, "aggregated.m3u")
 # 聚合刷新间隔（秒）——每 6 小时刷新一次公开源
 AGGREGATE_REFRESH_INTERVAL = 6 * 60 * 60
 
+# CCTV 开路频道中文标准名映射（编号 -> 中文副名）
+# 依据央视官方频道名；付费/专业频道（台球/高尔夫/风暴等）不在此表，会被过滤掉
+CCTV_NAME_MAP = {
+    "CCTV-1": "CCTV-1 综合",
+    "CCTV-2": "CCTV-2 财经",
+    "CCTV-3": "CCTV-3 综艺",
+    "CCTV-4": "CCTV-4 中文国际",
+    "CCTV-5+": "CCTV-5+ 体育赛事",
+    "CCTV-5": "CCTV-5 体育",
+    "CCTV-6": "CCTV-6 电影",
+    "CCTV-7": "CCTV-7 国防军事",
+    "CCTV-8": "CCTV-8 电视剧",
+    "CCTV-9": "CCTV-9 纪录",
+    "CCTV-10": "CCTV-10 科教",
+    "CCTV-11": "CCTV-11 戏曲",
+    "CCTV-12": "CCTV-12 社会与法",
+    "CCTV-13": "CCTV-13 新闻",
+    "CCTV-14": "CCTV-14 少儿",
+    "CCTV-15": "CCTV-15 音乐",
+    "CCTV-16": "CCTV-16 奥林匹克",
+    "CCTV-17": "CCTV-17 农业农村",
+    "CCTV-4K": "CCTV-4K 超高清",
+}
+
 
 class AggregatorUtils:
     """多源直播源聚合工具类"""
@@ -93,6 +117,56 @@ class AggregatorUtils:
         return channels
 
     @staticmethod
+    def extract_resolution(name):
+        """
+        从频道名提取分辨率数值，用于同台多分辨率时选最高清
+        :param name: 频道名（如 "CCTV-1 (1080p)"）
+        :return: 分辨率高度数值（1080）；无法识别返回 0
+        """
+        match = re.search(r'\((\d+)[piK]', name)
+        return int(match.group(1)) if match else 0
+
+    @staticmethod
+    def filter_and_translate(channels):
+        """
+        过滤公开源频道，只保留央视开路频道 + 各省卫视，并把英文名中文化
+        :param channels: 解析出的公开源频道列表
+        :return: 过滤+中文化后的频道列表
+        """
+        result = []
+        for ch in channels:
+            raw = ch["name"]
+
+            # 1. CCTV 开路频道：匹配 CCTV_NAME_MAP 的 key（去掉分辨率后缀后比对）
+            bare = re.sub(r'\s*\(\d+[piK]+.*\)\s*$', '', raw).strip()
+            if bare in CCTV_NAME_MAP:
+                # 记录原始分辨率，供去重时选最高清；再用中文标准名替换显示名
+                ch["_resolution"] = AggregatorUtils.extract_resolution(raw)
+                ch["name"] = CCTV_NAME_MAP[bare]
+                ch["tvg_name"] = CCTV_NAME_MAP[bare]
+                ch["group_title"] = "央视"
+                result.append(ch)
+                continue
+
+            # 2. 卫视频道：名称含"卫视"的保留（已为中文）
+            if "卫视" in raw:
+                # 记录原始分辨率（如 "河南卫视 (2160p)" -> 2160）
+                ch["_resolution"] = AggregatorUtils.extract_resolution(raw)
+                # BRTV 北京卫视 这种带英文前缀的，去掉前缀只留中文部分
+                cn_part = re.search(r'([\u4e00-\u9fa5]+卫视)', raw)
+                if cn_part:
+                    ch["name"] = cn_part.group(1)
+                    ch["tvg_name"] = cn_part.group(1)
+                ch["group_title"] = "卫视"
+                result.append(ch)
+                continue
+
+            # 3. 其余全部过滤（地方台/英文台/付费频道/国际版等）
+
+        print(f"过滤+中文化：{len(channels)} 个 -> 保留 {len(result)} 个（央视+卫视）")
+        return result
+
+    @staticmethod
     def normalize_name(name, source_prefix=""):
         """
         频道名归一化，用于去重对齐
@@ -112,27 +186,37 @@ class AggregatorUtils:
     @staticmethod
     def aggregate_m3u(hntv_channels, public_channels):
         """
-        合并 hntv 官方频道与公开源频道，按频道名去重，hntv 优先
-        :param hntv_channels: hntv 官方频道列表（优先级高，同名保留其地址）
-        :param public_channels: 公开源频道列表（只补充 hntv 没有的频道）
+        合并 hntv 官方频道与公开源频道：
+        - 按频道名去重，hntv 官方源优先（同名保留官方地址）
+        - 公开源只补充 hntv 没有的频道
+        - 公开源内同台多个分辨率时，保留清晰度最高的一个
+        :param hntv_channels: hntv 官方频道列表（优先级最高）
+        :param public_channels: 公开源频道列表（已过滤+中文化，只补充 hntv 没有的）
         :return: 合并后的 m3u 文本
         """
         merged = {}
         order = []  # 保持频道出现顺序，便于结果可读
 
-        def add_channel(ch, source_label):
+        # hntv 官方源先入（优先级最高，同名时官方地址始终保留）
+        for ch in hntv_channels:
             key = AggregatorUtils.normalize_name(ch["name"])
             if key not in merged:
                 merged[key] = ch
                 order.append(key)
 
-        # hntv 官方源先入（同名时官方地址优先保留）
-        for ch in hntv_channels:
-            add_channel(ch, "hntv")
-
-        # 公开源补充 hntv 没有的频道
+        # 公开源补充 hntv 没有的频道；同归一化名有多个分辨率时选最高清
+        # _resolution 字段在 filter_and_translate 中已按原始名记录
+        public_best = {}  # key -> (频道, 分辨率)
         for ch in public_channels:
-            add_channel(ch, "public")
+            key = AggregatorUtils.normalize_name(ch["name"])
+            res = ch.get("_resolution", 0)
+            if key not in public_best or res > public_best[key][1]:
+                public_best[key] = (ch, res)
+
+        for key, (ch, _res) in public_best.items():
+            if key not in merged:  # 只补充 hntv 没有的
+                merged[key] = ch
+                order.append(key)
 
         # 生成 m3u 文本
         m3u_content = "#EXTM3U\n\n"
@@ -183,10 +267,13 @@ class AggregatorUtils:
                 m3u_text = AggregatorUtils.fetch_public_m3u(url)
                 public_channels.extend(AggregatorUtils.parse_m3u_channels(m3u_text))
 
-            # 3. 合并去重
+            # 3. 过滤+中文化（只保留央视开路+卫视，英文名转中文）
+            public_channels = AggregatorUtils.filter_and_translate(public_channels)
+
+            # 4. 合并去重
             m3u_content = AggregatorUtils.aggregate_m3u(hntv_channels, public_channels)
 
-            # 4. 落盘缓存
+            # 5. 落盘缓存
             os.makedirs(XML_DATA_DIR, exist_ok=True)
             with open(AGGREGATED_M3U_PATH, 'w', encoding='utf-8') as f:
                 f.write(m3u_content)
