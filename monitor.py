@@ -71,7 +71,14 @@ class MonitorUtils:
         发送失败只记日志，不影响检测循环
         """
         try:
-            from email.send_assistant import EmailNotifier
+            # 项目内的 email/ 目录与 Python 标准库 email 同名会冲突，
+            # 这里用 importlib 从绝对路径加载，绕开命名冲突
+            import importlib.util
+            module_path = os.path.join(os.path.dirname(__file__), 'email', 'send_assistant.py')
+            spec = importlib.util.spec_from_file_location('send_assistant', module_path)
+            send_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(send_module)
+            EmailNotifier = send_module.EmailNotifier
 
             email_addr = os.environ.get('email', '').strip()
             email_pwd = os.environ.get('password', '').strip()
