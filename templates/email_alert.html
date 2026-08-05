@@ -1,0 +1,26 @@
+<!-- 告警邮件 HTML 模板 -->
+<!-- 占位符(单个花括号)由 monitor.py 的 _build_html 用 str.format 填充:
+     {theme_color} {icon} {banner_text} {title} {rows} {extra_rows} {time_str}
+     注意:CSS 中的字面花括号已用 {{ }} 转义 -->
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;border:1px solid #ddd;border-radius:8px;overflow:hidden;">
+  <div style="background:{theme_color};color:#fff;padding:16px 20px;">
+    <div style="font-size:20px;font-weight:bold;">{icon} {banner_text}</div>
+    <div style="font-size:14px;margin-top:4px;opacity:0.9;">{title}</div>
+  </div>
+  <table style="width:100%;border-collapse:collapse;font-size:14px;">
+    <thead>
+      <tr style="background:#f8f9fa;">
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd;">检测项</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd;">状态</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd;">详情</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows}
+      {extra_rows}
+    </tbody>
+  </table>
+  <div style="padding:12px 20px;color:#999;font-size:12px;border-top:1px solid #eee;">
+    检测时间：{time_str} · 此邮件由 hntv-api 健康监控自动发送
+  </div>
+</div>

@@ -12,6 +12,7 @@ load_dotenv()
 # 部署时容器内通过映射端口访问自身：服务对外 15002，容器内监听 5002
 HEALTH_URL = os.environ.get('MONITOR_HEALTH_URL', 'http://localhost:15002/health')
 M3U_URL = os.environ.get('MONITOR_M3U_URL', 'http://localhost:15002/api/live.m3u8')
+EPG_URL = os.environ.get('MONITOR_EPG_URL', 'http://localhost:15002/api/live.xml.gz')
 
 # 频道数低于此值视为异常（正常约 55；公开源全挂只剩 hntv 时约 15，30 居中可捕获此隐蔽故障）
 MIN_CHANNEL_COUNT = 30
@@ -62,12 +63,94 @@ class MonitorUtils:
             return False, 0
 
     @staticmethod
-    def send_alert(subject, message, level='error'):
+    def check_epg():
         """
-        发送告警邮件，复用现有 EmailNotifier
-        :param subject: 标题
-        :param message: 内容
+        检测 EPG 节目单：/api/live.xml.gz 返回 200 且内容非空
+        只验证可下载，不解压解析（gzip 内容有即视为正常）
+        :return: (正常bool, 大小KBint)
+        """
+        try:
+            r = requests.get(EPG_URL, timeout=15)
+            if r.status_code != 200:
+                return False, 0
+            size_kb = len(r.content) // 1024
+            return size_kb > 0, size_kb
+        except Exception as e:
+            print(f"epg 检测请求失败: {str(e)}")
+            return False, 0
+
+    # 邮件 HTML 模板路径（从文件加载，便于后期维护样式而不改代码）
+    TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), 'templates', 'email_alert.html')
+
+    @staticmethod
+    def _build_html(title, level, checks, extra_info=None):
+        """
+        构建告警邮件的 HTML 内容（从 templates/email_alert.html 加载模板并填充）
+        :param title: 标题（如"直播服务异常"）
         :param level: error(故障) / info(恢复)
+        :param checks: 检测项列表，每项为 dict(name, status, detail)
+        :param extra_info: 额外信息 dict（如连续失败次数）
+        :return: HTML 字符串
+        """
+        # 故障用红色调，恢复用绿色调
+        is_error = level == 'error'
+        theme_color = '#e74c3c' if is_error else '#27ae60'
+        icon = '⚠️' if is_error else '✅'
+        banner_text = '故障告警' if is_error else '服务恢复'
+
+        # 构建检测项表格行
+        rows = ''
+        for c in checks:
+            status_badge = (
+                '<span style="color:#fff;background:#27ae60;padding:2px 8px;border-radius:3px;font-size:12px;">正常</span>'
+                if c['status'] else
+                '<span style="color:#fff;background:#e74c3c;padding:2px 8px;border-radius:3px;font-size:12px;">异常</span>'
+            )
+            rows += (
+                f'<tr>'
+                f'<td style="padding:8px 12px;border-bottom:1px solid #eee;">{c["name"]}</td>'
+                f'<td style="padding:8px 12px;border-bottom:1px solid #eee;">{status_badge}</td>'
+                f'<td style="padding:8px 12px;border-bottom:1px solid #eee;color:#666;font-size:13px;">{c["detail"]}</td>'
+                f'</tr>'
+            )
+
+        # 额外信息行
+        extra_rows = ''
+        if extra_info:
+            for k, v in extra_info.items():
+                extra_rows += (
+                    f'<tr>'
+                    f'<td style="padding:8px 12px;border-bottom:1px solid #eee;">{k}</td>'
+                    f'<td style="padding:8px 12px;border-bottom:1px solid #eee;" colspan="2">{v}</td>'
+                    f'</tr>'
+                )
+
+        # 从模板文件读取并填充占位符
+        try:
+            with open(MonitorUtils.TEMPLATE_PATH, 'r', encoding='utf-8') as f:
+                template = f.read()
+        except Exception as e:
+            print(f"读取邮件模板失败，使用空模板: {str(e)}")
+            template = '{rows}'
+
+        return template.format(
+            theme_color=theme_color,
+            icon=icon,
+            banner_text=banner_text,
+            title=title,
+            rows=rows,
+            extra_rows=extra_rows,
+            time_str=time.strftime('%Y-%m-%d %H:%M:%S'),
+        )
+
+    @staticmethod
+    def send_alert(subject, checks, level='error', extra_info=None):
+        """
+        发送 HTML 告警邮件，复用现有 EmailNotifier
+        :param subject: 标题
+        :param checks: 检测项列表 [{name, status, detail}]
+        :param level: error(故障) / info(恢复)
+        :param extra_info: 额外信息 dict
         发送失败只记日志，不影响检测循环
         """
         try:
@@ -95,13 +178,22 @@ class MonitorUtils:
             elif '@outlook.com' in email_addr or '@hotmail.com' in email_addr:
                 email_type = 'outlook'
 
+            # 构建 HTML 内容
+            html_content = MonitorUtils._build_html(subject, level, checks, extra_info)
+
             notifier = EmailNotifier(
                 email_type=email_type,
                 username=email_addr,
                 password=email_pwd,
                 from_addr=email_addr,
             )
-            notifier.send_notification(title=subject, message=message, level=level)
+            # 用 HTML 格式发送（绕过纯文本的 send_notification）
+            notifier.send(
+                to_addrs=[email_addr],
+                subject=f"[{'故障告警' if level == 'error' else '服务恢复'}] {subject}",
+                content=html_content,
+                content_type='html',
+            )
             print(f"告警邮件已发送: [{level}] {subject}")
         except Exception as e:
             print(f"发送告警邮件出错: {str(e)}")
@@ -116,11 +208,12 @@ class MonitorUtils:
         """
         health_ok = MonitorUtils.check_health()
         m3u_ok, channel_count = MonitorUtils.check_m3u()
-        current = "OK" if (health_ok and m3u_ok) else "FAIL"
+        epg_ok, epg_size = MonitorUtils.check_epg()
+        current = "OK" if (health_ok and m3u_ok and epg_ok) else "FAIL"
 
         if current == "OK":
             MonitorUtils._fail_count = 0
-            print(f"健康检测正常（频道数 {channel_count}）")
+            print(f"健康检测正常（频道数 {channel_count}，节目单 {epg_size}KB）")
         else:
             MonitorUtils._fail_count += 1
             reason = []
@@ -128,23 +221,45 @@ class MonitorUtils:
                 reason.append("/health 不可达")
             if not m3u_ok:
                 reason.append(f"频道数 {channel_count} < {MIN_CHANNEL_COUNT}")
+            if not epg_ok:
+                reason.append("节目单不可用")
             print(f"健康检测异常（连续第 {MonitorUtils._fail_count} 次）：{', '.join(reason)}")
 
         # 状态翻转时才发邮件
         if current == "FAIL" and MonitorUtils._last_status == "OK":
+            checks = [
+                {
+                    "name": "服务存活 (/health)",
+                    "status": health_ok,
+                    "detail": "响应正常" if health_ok else "不可达或状态异常",
+                },
+                {
+                    "name": "直播源 (频道数)",
+                    "status": m3u_ok,
+                    "detail": f"{channel_count} 个频道" if m3u_ok
+                              else f"{channel_count} 个，低于阈值 {MIN_CHANNEL_COUNT}",
+                },
+                {
+                    "name": "节目单 (EPG)",
+                    "status": epg_ok,
+                    "detail": f"{epg_size} KB" if epg_ok else "不可用或为空",
+                },
+            ]
             MonitorUtils.send_alert(
                 subject="直播服务异常",
-                message=f"检测到服务异常：{', '.join(reason) if not health_ok or not m3u_ok else ''}\n"
-                        f"健康检查：{'正常' if health_ok else '失败'}\n"
-                        f"频道数：{channel_count}（阈值 {MIN_CHANNEL_COUNT}）\n"
-                        f"时间：{time.strftime('%Y-%m-%d %H:%M:%S')}",
+                checks=checks,
                 level='error',
+                extra_info={"连续失败次数": f"第 {MonitorUtils._fail_count} 次"},
             )
         elif current == "OK" and MonitorUtils._last_status == "FAIL":
+            checks = [
+                {"name": "服务存活 (/health)", "status": True, "detail": "响应正常"},
+                {"name": "直播源 (频道数)", "status": True, "detail": f"{channel_count} 个频道"},
+                {"name": "节目单 (EPG)", "status": True, "detail": f"{epg_size} KB"},
+            ]
             MonitorUtils.send_alert(
                 subject="直播服务已恢复",
-                message=f"服务已恢复正常，当前频道数 {channel_count}\n"
-                        f"时间：{time.strftime('%Y-%m-%d %H:%M:%S')}",
+                checks=checks,
                 level='info',
             )
 
