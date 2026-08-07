@@ -255,6 +255,11 @@ class AggregatorUtils:
                 merged[key] = ch
                 order.append(key)
 
+        # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后），其余兜底
+        # 稳定排序，同组内保持原有相对顺序
+        GROUP_ORDER = {"河南卫视": 0, "央视": 1, "卫视": 2}
+        order.sort(key=lambda k: GROUP_ORDER.get(merged[k]["group_title"], 3))
+
         # 生成 m3u 文本
         m3u_content = "#EXTM3U\n\n"
         for key in order:
