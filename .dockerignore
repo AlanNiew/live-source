@@ -1,0 +1,8 @@
+# 排除密钥、缓存与本地环境，避免打进镜像
+.env
+xml_data/
+venv/
+__pycache__/
+.git/
+.idea/
+*.md
