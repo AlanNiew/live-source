@@ -51,6 +51,7 @@ run_container() {
     --name ${CONTAINER_NAME} \
     -p 15002:5002 \
     -e GUNICORN_WORKERS=1 \
+    -e TZ=Asia/Shanghai \
     ${IMAGE_NAME}
   if [ $? -ne 0 ]; then
     echo "错误: 容器启动失败！" >&2
