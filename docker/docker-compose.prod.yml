@@ -10,6 +10,7 @@ services:
       - "5002:5002"
     environment:
       - ENV=production
+      - TZ=Asia/Shanghai
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs
