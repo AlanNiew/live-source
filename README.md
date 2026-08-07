@@ -7,8 +7,7 @@
 ```
 .
 ├── docker/                 # Docker相关配置
-│   ├── build.sh           # 构建脚本
-│   ├── run.sh             # 运行脚本
+│   ├── build.sh           # 构建+运行脚本（支持 build/run/all 参数）
 │   └── docker-compose.prod.yml # 生产环境编排文件
 ├── email/                 # 邮件助手模块
 │   ├── email_assistant.py # 邮件助手主逻辑
