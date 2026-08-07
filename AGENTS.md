@@ -39,7 +39,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 ## 监控告警（monitor.py）
 
-- 默认自检地址写死 `localhost:15002`（对应 `docker/build.sh` 运行容器时的 `15002:5002` 映射）；若用 `docker-compose.prod.yml`（映射 `5002:5002`）则检测不到自身，需设 `MONITOR_HEALTH_URL` 等环境变量覆盖
+- 默认自检地址 `localhost:5002`（monitor 跑在容器内部，用 gunicorn 监听端口；宿主机映射端口 `15002` 在容器内连不上）。若未来加 nginx 反代，需设 `MONITOR_HEALTH_URL` 等环境变量指向反代入口
 - `MIN_CHANNEL_COUNT=30`：正常聚合约 55 频道，若公开源全挂只剩 hntv 约 15，会触发告警
 - 邮件模板在 `templates/email_alert.html`（占位符填充，`_build_html`）
 

@@ -9,10 +9,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 检测目标（URL 硬编码，与现有 hntv API URL / aggregator 源列表的模式一致）
-# 部署时容器内通过映射端口访问自身：服务对外 15002，容器内监听 5002
-HEALTH_URL = os.environ.get('MONITOR_HEALTH_URL', 'http://localhost:15002/health')
-M3U_URL = os.environ.get('MONITOR_M3U_URL', 'http://localhost:15002/api/live.m3u8')
-EPG_URL = os.environ.get('MONITOR_EPG_URL', 'http://localhost:15002/api/live.xml.gz')
+# 注意：monitor 跑在 api 容器内部，自检地址要用容器内端口 5002（gunicorn 监听端口），
+# 不能用宿主机映射端口 15002（容器内 localhost 是容器自身，15002 连不上）。
+# 本地开发环境 python main.py 同样监听 5002，此默认值通用。
+# 若未来加 nginx 反代，需用环境变量覆盖指向反代入口（如 http://nginx/health）。
+HEALTH_URL = os.environ.get('MONITOR_HEALTH_URL', 'http://localhost:5002/health')
+M3U_URL = os.environ.get('MONITOR_M3U_URL', 'http://localhost:5002/api/live.m3u8')
+EPG_URL = os.environ.get('MONITOR_EPG_URL', 'http://localhost:5002/api/live.xml.gz')
 
 # 频道数低于此值视为异常（正常约 55；公开源全挂只剩 hntv 时约 15，30 居中可捕获此隐蔽故障）
 MIN_CHANNEL_COUNT = 30
