@@ -210,6 +210,16 @@ if __name__ == '__main__':
     schedule_daily_xml_update()
     print("定时XML更新任务已启动")
 
+    # 启动定时聚合刷新任务（多源 m3u 聚合，每6小时刷新）
+    from aggregator import AggregatorScheduler
+    AggregatorScheduler.schedule_aggregate_refresh()
+    print("定时聚合刷新任务已启动")
+
+    # 启动健康监控任务（定时检测服务存活，异常时邮件告警）
+    from monitor import MonitorScheduler
+    MonitorScheduler.schedule_monitor()
+    print("健康监控任务已启动")
+
     # 启动Flask应用 - 仅在直接运行脚本时使用（开发环境）
     print("\n启动Web API服务...")
     app.run(debug=False, host='0.0.0.0', port=5002)
@@ -217,3 +227,13 @@ else:
     # 在WSGI服务器环境下启动定时任务
     schedule_daily_xml_update()
     print("定时XML更新任务已启动")
+
+    # 启动定时聚合刷新任务（多源 m3u 聚合，每6小时刷新）
+    from aggregator import AggregatorScheduler
+    AggregatorScheduler.schedule_aggregate_refresh()
+    print("定时聚合刷新任务已启动")
+
+    # 启动健康监控任务（定时检测服务存活，异常时邮件告警）
+    from monitor import MonitorScheduler
+    MonitorScheduler.schedule_monitor()
+    print("健康监控任务已启动")
