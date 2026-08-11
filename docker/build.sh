@@ -56,6 +56,8 @@ run_container() {
     --env-file "${SCRIPT_DIR}/../.env" \
     -e GUNICORN_WORKERS=1 \
     -e TZ=Asia/Shanghai \
+    --log-opt max-size=10m \
+    --log-opt max-file=3 \
     ${IMAGE_NAME}
   if [ $? -ne 0 ]; then
     echo "错误: 容器启动失败！" >&2
