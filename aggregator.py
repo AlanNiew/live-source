@@ -13,13 +13,16 @@ load_dotenv()
 from utils import XML_DATA_DIR
 
 # 公开 m3u 源列表（代码常量，与现有 hntv API URL 的硬编码模式一致；只有密钥才进 .env）
-# 两个源互补：
+# 三个源互补：
 # - iptv-org：央视全（17个），但卫视多为运营商内网IP，公网可达性差
-# - hujingguang：卫视用电视台自有域名（cztv.com/jxtvcn.com.cn 等），公网可达性高
-# 聚合去重时按地址质量评分选优（域名 > 公网IP > 内网IP），自动保留可达性更好的源
+# - hujingguang：卫视用电视台自有域名（cztv.com/jxtvcn.com.cn 等），但多为短时效防盗链签名
+# - wwb521：卫视大台齐全（浙江/东方/江苏/湖南等，cztv 阿里云/bestv 百视通/mgtv 芒果 CDN），
+#   实测公网可达率约 38%（远超前两源的 10%）；走 jsdelivr CDN 拉取（raw.githubusercontent 国内不稳定）
+# 聚合去重时按地址质量评分选优（无签名域名 > IPv6/公网IP/签名域名 > 内网IP），自动保留可达性更好的源
 PUBLIC_M3U_SOURCES = [
     "https://iptv-org.github.io/iptv/countries/cn.m3u",
     "https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u8",
+    "https://cdn.jsdelivr.net/gh/wwb521/live@main/tv.m3u",
 ]
 
 # 聚合结果落盘缓存路径（供 /api/live.m3u8 读取，避免每次请求都实时拉公开源）
@@ -93,6 +96,10 @@ class AggregatorUtils:
             if line.startswith("#EXTINF") and i + 1 < len(lines):
                 url = lines[i + 1].strip()
 
+                # 清洗多线路后缀：`$` 后是线路标记（tvbox 语法）、`;` 分隔备选地址，
+                # 都只保留第一路，避免把整串当 URL 请求 404
+                url = url.split('$')[0].split(';')[0].strip()
+
                 # 解析 tvg-name / group-title 属性
                 tvg_name = ""
                 group_title = "其他"
@@ -131,18 +138,26 @@ class AggregatorUtils:
         return int(match.group(1)) if match else 0
 
     # 疑似运营商 IPTV 内网 IP 段前缀（这些段多为移动/电信/联通的 IPTV 专网，
-    # 公网环境通常不可达）。用于地址质量评分，优先选域名等公网可达的流
+    # 公网环境通常不可达）。用于地址质量评分，优先选域名等公网可达的流。
+    # 注：112./120./218. 开头实测含公网可达 CDN（112.27.235.94 吉林/120.76.248.139 阿里云/218.84.12.186），
+    # 已从前缀中移除，避免误伤
     CARRIER_IP_PREFIXES = (
-        '118.', '112.', '111.', '117.', '120.', '183.', '39.', '27.',
-        '125.', '61.', '218.', '211.', '60.', '175.',
+        '118.', '111.', '117.', '183.', '39.', '27.',
+        '125.', '61.', '211.', '60.', '175.',
     )
+
+    # 带时效防盗链签名参数的地址（公开源抓取后缓存期间会过期），域名源降 1 分
+    # 注意：hntv 官方源不参与公开源择优，不受影响
+    SIGN_PARAM_PAT = re.compile(
+        r'[?&](auth_key|authKey|sign|token|wsSecret|wsTime|expire|expires|txSecret|GuardEncType|accountinfo)=',
+        re.I)
 
     @staticmethod
     def score_url(url):
         """
         评估流地址的公网可达性质量分，用于同名频道多来源时择优保留
         :param url: 流地址
-        :return: 质量分（域名=3 > 公网IP=2 > 疑似内网IP=1 > 其他=0）
+        :return: 质量分（无签名域名=3 > 公网IP/签名域名=2 > 疑似内网IP=1 > 其他=0）
         """
         match = re.match(r'https?://([^\[/:]+)', url)
         if not match:
@@ -150,7 +165,12 @@ class AggregatorUtils:
         host = match.group(1)
         # 域名（含子域）通常指向 CDN/电视台官网，公网可达性最好
         if not re.match(r'\d+\.\d+\.\d+\.\d+$', host):
-            return 3
+            score = 3
+            # 带时效签名的域名源（cztv auth_key / jxtvcn token 等）会过期，降 1 分，
+            # 让同台无签名源（如 wwb521 的 CDN 源）胜出
+            if AggregatorUtils.SIGN_PARAM_PAT.search(url):
+                score = 2
+            return score
         # 疑似运营商内网 IP
         if host.startswith(AggregatorUtils.CARRIER_IP_PREFIXES):
             return 1
