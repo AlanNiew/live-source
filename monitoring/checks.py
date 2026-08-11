@@ -5,10 +5,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
-from config import (ALERT_GROUPS, CHECK_INTERVAL, DEFAULT_GROUP_RATIO,
-                    EPG_URL, GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
+from config import (ALERT_GROUPS, DEFAULT_GROUP_RATIO, EPG_URL,
+                    GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
                     MIN_CHANNEL_COUNT, STREAM_CHECK_CONCURRENCY)
 from core.probing import probe_stream
+from core.sources import SourceUtils
 from monitoring.alerts import AlertUtils
 
 
@@ -87,15 +88,11 @@ class CheckUtils:
             if r.status_code != 200:
                 return []
             items = []
-            cur_group = "其他"
-            for line in r.text.splitlines():
-                line = line.strip()
-                if line.startswith('#EXTINF'):
-                    m = re.search(r'group-title="([^"]*)"', line)
-                    if m:
-                        cur_group = m.group(1)
-                elif line.startswith(('http://', 'https://')):
-                    items.append((line, cur_group))
+            for extinf, url in SourceUtils.iter_m3u_entries(r.text):
+                if not url.startswith(('http://', 'https://')):
+                    continue
+                m = re.search(r'group-title="([^"]*)"', extinf)
+                items.append((url, m.group(1) if m else "其他"))
             return items
         except Exception as e:
             print(f"流地址解析请求失败: {str(e)}")

@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config import (AGGREGATED_M3U_PATH, FILTER_UNREACHABLE, GROUP_ORDER,
                     STREAM_CHECK_CONCURRENCY, STREAM_FAILURES_PATH,
-                    STREAM_FAIL_LIMIT, XML_DATA_DIR)
+                    STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE, XML_DATA_DIR)
 from core.hntv_client import ApiUtils
 from core.probing import probe_stream
 from core.sources import SourceUtils
@@ -13,6 +13,25 @@ from core.sources import SourceUtils
 
 class AggregatorUtils:
     """多源直播源聚合工具类"""
+
+    @staticmethod
+    def _extract_hntv_item(item):
+        """
+        从 HNTV 官方频道条目提取聚合字段
+        :param item: 官方接口返回的单个频道 dict
+        :return: 聚合频道 dict（无可用流地址返回 None）
+        """
+        name = item.get('name', 'Unknown')
+        cid = item.get('cid')
+        streams = item.get('video_streams') or item.get('streams', [])
+        if not streams:
+            return None
+        return {
+            "name": name,
+            "tvg_name": str(cid) if cid is not None else name,
+            "group_title": "河南卫视",
+            "url": streams[0],
+        }
 
     @staticmethod
     def fetch_hntv_channels():
@@ -27,16 +46,9 @@ class AggregatorUtils:
                 data = response.json()
                 if isinstance(data, list):
                     for item in data:
-                        name = item.get('name', 'Unknown')
-                        cid = item.get('cid')
-                        streams = item.get('video_streams') or item.get('streams', [])
-                        if streams:
-                            hntv_channels.append({
-                                "name": name,
-                                "tvg_name": str(cid) if cid is not None else name,
-                                "group_title": "河南卫视",
-                                "url": streams[0],
-                            })
+                        ch = AggregatorUtils._extract_hntv_item(item)
+                        if ch:
+                            hntv_channels.append(ch)
         except Exception as e:
             print(f"拉取 hntv 官方源出错: {str(e)}")
         return hntv_channels
@@ -157,11 +169,14 @@ class AggregatorUtils:
         failures = AggregatorUtils._load_failures()
         probed_urls = set(urls.values())
 
-        # 并发探测（宽松判定：403 也算可达）
+        # 并发探测（宽松判定：403 也算可达；用聚合专用 UA 保持历史行为）
         results = {}
         with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
             for url, ok in zip(urls.values(),
-                               executor.map(lambda u: probe_stream(u, accept_403=True), urls.values())):
+                               executor.map(
+                                   lambda u: probe_stream(u, accept_403=True,
+                                                         user_agent=STREAM_PROBE_UA_LOOSE),
+                                   urls.values())):
                 results[url] = ok
 
         dropped = []
@@ -245,17 +260,17 @@ class AggregatorUtils:
         if response.status_code != 200:
             return "#EXTM3U\n# Error: Failed to fetch data"
 
-        data = response.json()
         m3u_content = "#EXTM3U\n\n"
+        data = response.json()
         if isinstance(data, list):
             for item in data:
-                name = item.get('name', 'Unknown')
-                cid = item.get('cid')
-                streams = item.get('video_streams') or item.get('streams', [])
-                if streams:
-                    stream_url = streams[0]
-                    m3u_content += f'#EXTINF:-1 tvg-id="{cid}" tvg-name="{name}" group-title="河南卫视",{name}\n'
-                    m3u_content += f'{stream_url}\n\n'
+                ch = AggregatorUtils._extract_hntv_item(item)
+                if ch:
+                    m3u_content += (
+                        f'#EXTINF:-1 tvg-id="{ch["tvg_name"]}" tvg-name="{ch["name"]}" '
+                        f'group-title="河南卫视",{ch["name"]}\n'
+                        f'{ch["url"]}\n\n'
+                    )
 
         return m3u_content
 

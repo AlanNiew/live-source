@@ -37,6 +37,27 @@ class SourceUtils:
         return channels
 
     @staticmethod
+    def iter_m3u_entries(m3u_text):
+        """
+        迭代 m3u 文本，产出 (EXTINF 行, 播放地址行) 条目
+        共享的行级解析核心（parse_m3u_channels 与监控探测共用）
+        :param m3u_text: m3u 原始文本
+        :yield: (EXTINF 行字符串, 播放地址行)
+        """
+        if not m3u_text:
+            return
+        lines = m3u_text.strip().splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            # EXTINF 行后面紧跟一个播放地址行
+            if line.startswith("#EXTINF") and i + 1 < len(lines):
+                yield line, lines[i + 1].strip()
+                i += 2
+            else:
+                i += 1
+
+    @staticmethod
     def parse_m3u_channels(m3u_text):
         """
         按行解析 m3u 文本，提取频道列表
@@ -44,45 +65,32 @@ class SourceUtils:
         :return: 频道 dict 列表，每个 dict 含 name/tvg_name/group_title/url
         """
         channels = []
-        if not m3u_text:
-            return channels
+        for line, url in SourceUtils.iter_m3u_entries(m3u_text):
+            # 清洗多线路后缀：`$` 后是线路标记（tvbox 语法）、`;` 分隔备选地址，
+            # 都只保留第一路，避免把整串当 URL 请求 404
+            url = url.split('$')[0].split(';')[0].strip()
 
-        lines = m3u_text.strip().splitlines()
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            # EXTINF 行后面紧跟一个播放地址行
-            if line.startswith("#EXTINF") and i + 1 < len(lines):
-                url = lines[i + 1].strip()
+            # 解析 tvg-name / group-title 属性
+            tvg_name = ""
+            group_title = "其他"
 
-                # 清洗多线路后缀：`$` 后是线路标记（tvbox 语法）、`;` 分隔备选地址，
-                # 都只保留第一路，避免把整串当 URL 请求 404
-                url = url.split('$')[0].split(';')[0].strip()
+            tvg_match = re.search(r'tvg-name="([^"]*)"', line)
+            if tvg_match:
+                tvg_name = tvg_match.group(1)
 
-                # 解析 tvg-name / group-title 属性
-                tvg_name = ""
-                group_title = "其他"
+            group_match = re.search(r'group-title="([^"]*)"', line)
+            if group_match:
+                group_title = group_match.group(1)
 
-                tvg_match = re.search(r'tvg-name="([^"]*)"', line)
-                if tvg_match:
-                    tvg_name = tvg_match.group(1)
+            # 频道名取 EXTINF 行末尾逗号后的部分
+            name = line.split(",")[-1].strip()
 
-                group_match = re.search(r'group-title="([^"]*)"', line)
-                if group_match:
-                    group_title = group_match.group(1)
-
-                # 频道名取 EXTINF 行末尾逗号后的部分
-                name = line.split(",")[-1].strip()
-
-                channels.append({
-                    "name": name,
-                    "tvg_name": tvg_name or name,
-                    "group_title": group_title,
-                    "url": url,
-                })
-                i += 2
-            else:
-                i += 1
+            channels.append({
+                "name": name,
+                "tvg_name": tvg_name or name,
+                "group_title": group_title,
+                "url": url,
+            })
 
         return channels
 
@@ -162,18 +170,13 @@ class SourceUtils:
         return result
 
     @staticmethod
-    def normalize_name(name, source_prefix=""):
+    def normalize_name(name):
         """
         频道名归一化，用于去重对齐
         :param name: 原始频道名
-        :param source_prefix: 来源前缀（为未来多省台接入预留，当前不传；
-                              届时如 "河南" 可把裸名地面频道区分开）
         :return: 归一化后的频道名
         """
         normalized = name.strip()
         # 去掉尾部分辨率后缀，如 "河南卫视 (2160p)" -> "河南卫视"
         normalized = re.sub(r'\s*\(\d+[piK]+.*\)\s*$', '', normalized)
-        normalized = normalized.strip()
-        if source_prefix:
-            normalized = f"{source_prefix}-{normalized}"
-        return normalized
+        return normalized.strip()

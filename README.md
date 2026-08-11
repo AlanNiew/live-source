@@ -56,7 +56,7 @@ password=邮箱授权码（QQ/163 在邮箱设置中获取）
 
 **`.env` 格式要求**：`KEY=VALUE` —— 键名后无空格、值不带引号、无行内注释，否则 docker `--env-file` 解析失败或值带引号导致 SMTP 认证失败。
 
-> 注意：`.env` 已被 git 跟踪但含密钥，**不要 commit 或打印其内容**。修改后建议 `git update-index --skip-worktree .env` 避免 pull 冲突。
+> 注意：`.env` 已被 git 移除跟踪并加入 `.gitignore`（历史中已清除），修改不会产生 git 冲突；**不要提交或打印其内容**，密钥变更需同步服务器 `.env`。
 
 ### 2. 安装依赖（清华镜像加速）
 

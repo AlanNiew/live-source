@@ -115,7 +115,8 @@ STARTUP_DELAY = 90           # 首次检测延迟（秒）：等聚合任务跑�
 STREAM_CHECK_INTERVAL = 1800        # 全量流探测间隔（秒），30 分钟一轮
 STREAM_CHECK_CONCURRENCY = 10       # 并发探测数
 STREAM_PROBE_TIMEOUT = 8            # 单流探测超时（秒）
-STREAM_USER_AGENT = 'hntv-api-monitor'
+STREAM_USER_AGENT = 'hntv-api-monitor'        # 监控探测 UA
+STREAM_PROBE_UA_LOOSE = 'hntv-api-aggregator'  # 聚合过滤探测 UA（与监控区分，避免源端拒答差异）
 
 # 分组可达率阈值（按用户对分组的重要性分级）：
 # - 河南卫视（官方源，权重最高）：低于 90% 告警

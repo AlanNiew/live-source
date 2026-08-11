@@ -32,11 +32,11 @@ class AggregatorFilterTest(unittest.TestCase):
         # 探测结果控制：url -> 可达
         self.results = {}
 
-        def fake_probe(url, accept_403=False):
+        def fake_probe(url, accept_403=False, user_agent=None):
             return self.results.get(url, True)
 
         patcher_probe = mock.patch('core.aggregator.probe_stream', side_effect=fake_probe)
-        patcher_probe.start()
+        self.probe_mock = patcher_probe.start()
         self.addCleanup(patcher_probe.stop)
 
     def _build(self):
@@ -52,11 +52,15 @@ class AggregatorFilterTest(unittest.TestCase):
         """第一轮失败：保留，失败计数=1，官方源未被探测"""
         merged, order, hntv = self._build()
         self.results = {'http://bad/bjws.m3u8': False}
+        self.probe_mock.reset_mock()
         AggregatorUtils.filter_unreachable(merged, order, hntv)
         self.assertIn('北京卫视', merged)
         rec = json.load(open(self.fail_path, encoding='utf-8'))
         self.assertEqual(rec.get('http://bad/bjws.m3u8'), 1)
-        self.assertNotIn('http://official/1.m3u8', self.results)
+        # 验证官方源 URL 从未进入探测调用（mock 实际调用记录）
+        probed_urls = [c.args[0] for c in self.probe_mock.call_args_list]
+        self.assertNotIn('http://official/1.m3u8', probed_urls)
+        self.assertIn('http://bad/bjws.m3u8', probed_urls)
 
     def test_second_fail_dropped(self):
         """连续两轮失败：丢弃（预置第一轮失败计数=1）"""

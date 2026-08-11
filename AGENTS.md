@@ -21,7 +21,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 ## 环境变量（.env）
 
-键：`API_TOKEN`、`HNTV_SECRET_KEY`、`email`、`password`（QQ/163 邮箱授权码）。`.env` 已被 git 跟踪但含密钥，**不要 commit 或打印其内容**。
+键：`API_TOKEN`、`HNTV_SECRET_KEY`、`email`、`password`（QQ/163 邮箱授权码）。`.env` 已被 git 移除跟踪（历史中已清除，见 `.env.example` 打码模板），**不要提交或打印其内容**。
 
 - `API_TOKEN` / `HNTV_SECRET_KEY` 在 `config.py` 有弱默认值兜底（`hntv-secret-token-2025` / `6ca114a836ac7d73`），生产必须显式覆盖
 - 上游 HNTV API 鉴权 = `timestamp` + `sign` 两个请求头，`sign = sha256(SECRET_KEY + timestamp)`（`core/hntv_client.py:CryptoUtils`）
@@ -63,6 +63,6 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 - 项目内 `email/` 目录与 Python 标准库 `email` 同名冲突。`monitoring/alerts.py:send_alert` 用 `importlib.util.spec_from_file_location` 从绝对路径加载 `send_assistant.py`；**新代码不要 `import email` 或 `from email...`**，照抄 alerts.py 的加载方式
 - 所有日期/定时/EPG 时间戳均按 **GMT+8** 处理（`config.py:GMT8`），不要用本地时区
-- `git status` 显示 `.env`、`__pycache__/`、`xml_data/` 被改动/未跟踪：`.gitignore` 只有 `/.idea/`，**不要把缓存与密钥提交**
+- `git status` 显示 `xml_data/` 未跟踪：`.gitignore` 已排除 `.env`、`__pycache__/`、`*.pyc`、`/.idea/`，**不要把缓存与密钥提交**
 - 容器内无 `.env` 文件是正常的（`.dockerignore` 排除 + `--env-file` 注入），进容器排查用 `env | cut -d= -f1` 看键名
 - `api_usage.md` 与 README 部分过时（如端口、workers 数、旧文件名），以代码为准

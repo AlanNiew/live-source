@@ -34,10 +34,7 @@ class CryptoUtils:
         if timestamp is None:
             timestamp = str(int(time.time()))
         combined_string = secret_key + str(timestamp)
-        sha256_hash = hashlib.sha256(combined_string.encode('utf-8')).hexdigest()
-        print(f"加密时间戳: {timestamp}")
-        print(f"SHA256哈希值: {sha256_hash}")
-        return sha256_hash
+        return hashlib.sha256(combined_string.encode('utf-8')).hexdigest()
 
     @staticmethod
     def _auth_headers():
