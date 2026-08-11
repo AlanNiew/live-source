@@ -53,6 +53,7 @@ run_container() {
   docker run -d \
     --name ${CONTAINER_NAME} \
     -p 15002:5002 \
+    --env-file "${SCRIPT_DIR}/../.env" \
     -e GUNICORN_WORKERS=1 \
     -e TZ=Asia/Shanghai \
     ${IMAGE_NAME}
