@@ -1,12 +1,17 @@
 import os
 import time
 import threading
+import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
+
+# GMT+8 时区（与 utils.py 的 GMT8 一致，所有定时/时间判断均按此，不依赖容器时区）
+GMT8 = datetime.timezone(datetime.timedelta(hours=8))
 
 # 检测目标（URL 硬编码，与现有 hntv API URL / aggregator 源列表的模式一致）
 # 注意：monitor 跑在 api 容器内部，自检地址要用容器内端口 5002（gunicorn 监听端口），
@@ -20,8 +25,19 @@ EPG_URL = os.environ.get('MONITOR_EPG_URL', 'http://localhost:5002/api/live.xml.
 # 频道数低于此值视为异常（正常约 55；公开源全挂只剩 hntv 时约 15，30 居中可捕获此隐蔽故障）
 MIN_CHANNEL_COUNT = 30
 
-CHECK_INTERVAL = 60          # 检测间隔（秒）
+# 检测时段（GMT+8）：仅 8:00 - 24:00 检测，0:00-7:59 不检测（不消耗流量/不打扰）
+CHECK_WINDOW_START_HOUR = 8     # 开始（含）
+CHECK_WINDOW_END_HOUR = 24      # 结束（不含）
+
+CHECK_INTERVAL = 600         # 健康检测间隔（秒），10 分钟一轮
 STARTUP_DELAY = 90           # 首次检测延迟（秒）：等聚合任务跑完首次，避免启动初期误报
+
+# 流地址可达性检测（低频全量探测）配置
+STREAM_CHECK_INTERVAL = 1800        # 全量流探测间隔（秒），30 分钟一轮
+STREAM_CHECK_CONCURRENCY = 10       # 并发探测数
+STREAM_PROBE_TIMEOUT = 8            # 单流探测超时（秒）
+STREAM_MIN_HEALTH_RATIO = 0.5       # 可达率阈值，低于此值判异常（运营商内网 IP 流稳定不可达，0.8 过高）
+STREAM_USER_AGENT = 'hntv-api-monitor'
 
 
 class MonitorUtils:
@@ -32,6 +48,9 @@ class MonitorUtils:
     _last_status = "OK"
     # 连续失败计数，仅用于日志，不影响发邮件逻辑
     _fail_count = 0
+    # 流探测独立状态机（低频全量探测，10 分钟一轮）
+    _stream_last_status = "OK"
+    _stream_fail_count = 0
 
     @staticmethod
     def check_health():
@@ -81,6 +100,125 @@ class MonitorUtils:
         except Exception as e:
             print(f"epg 检测请求失败: {str(e)}")
             return False, 0
+
+    @staticmethod
+    def fetch_m3u_urls():
+        """
+        拉取聚合 m3u 文本并解析出所有流地址
+        只统计 http(s) 流：rtmp 等非 HTTP 协议 requests 无法探测，跳过不计入分母
+        :return: 流地址列表；拉取失败返回空列表
+        """
+        try:
+            r = requests.get(M3U_URL, timeout=10)
+            if r.status_code != 200:
+                return []
+            urls = []
+            for line in r.text.splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if not (line.startswith('http://') or line.startswith('https://')):
+                    continue
+                urls.append(line)
+            return urls
+        except Exception as e:
+            print(f"流地址解析请求失败: {str(e)}")
+            return []
+
+    @staticmethod
+    def probe_stream(url):
+        """
+        探测单个流地址可达性：GET + Range 请求读少量字节即断开
+        （HEAD 对直播源不可靠，很多返回 404；Range 206 也算成功）
+        :param url: 流地址
+        :return: True 可达 / False 不可达
+        """
+        r = None
+        try:
+            r = requests.get(
+                url, timeout=STREAM_PROBE_TIMEOUT, stream=True,
+                headers={'Range': 'bytes=0-1024', 'User-Agent': STREAM_USER_AGENT},
+            )
+            if r.status_code in (200, 206):
+                try:
+                    return bool(next(r.iter_content(1024)))
+                except StopIteration:
+                    return False
+            return False
+        except Exception:
+            return False
+        finally:
+            if r is not None:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def check_streams():
+        """
+        全量并发探测聚合列表中的流地址
+        :return: (可达数, 总数)；列表拉不到时返回 (0, 0)
+        """
+        urls = MonitorUtils.fetch_m3u_urls()
+        if not urls:
+            return 0, 0
+        ok = 0
+        with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
+            for result in executor.map(MonitorUtils.probe_stream, urls):
+                if result:
+                    ok += 1
+        return ok, len(urls)
+
+    @staticmethod
+    def run_stream_check_once():
+        """
+        执行一次全量流探测，按独立状态机决定是否发邮件（翻转才发）：
+        - OK → FAIL：发"直播流可达性异常"告警
+        - FAIL → OK：发恢复通知
+        - 持续同态：不发（避免轰炸）
+        独立于 run_check_once 的常规状态机，低频运行（10 分钟一轮）
+        """
+        ok_count, total = MonitorUtils.check_streams()
+        if total == 0:
+            current = "FAIL"
+            ratio = 0.0
+            print("流探测异常：聚合列表拉取失败或无流地址")
+        else:
+            ratio = ok_count / total
+            current = "OK" if ratio >= STREAM_MIN_HEALTH_RATIO else "FAIL"
+            print(f"流探测：{ok_count}/{total} 可达（{ratio:.0%}）")
+
+        if current == "FAIL":
+            MonitorUtils._stream_fail_count += 1
+            print(f"流探测异常（连续第 {MonitorUtils._stream_fail_count} 次）："
+                  f"可达率 {ratio:.0%}，低于阈值 {STREAM_MIN_HEALTH_RATIO:.0%}")
+        else:
+            MonitorUtils._stream_fail_count = 0
+
+        # 状态翻转时才发邮件
+        if current == "FAIL" and MonitorUtils._stream_last_status == "OK":
+            MonitorUtils.send_alert(
+                subject="直播流可达性异常",
+                checks=[{
+                    "name": "流地址可达性",
+                    "status": False,
+                    "detail": f"{ok_count}/{total} 可达（{ratio:.0%}），低于阈值 {STREAM_MIN_HEALTH_RATIO:.0%}",
+                }],
+                level='error',
+                extra_info={"连续失败次数": f"第 {MonitorUtils._stream_fail_count} 次"},
+            )
+        elif current == "OK" and MonitorUtils._stream_last_status == "FAIL":
+            MonitorUtils.send_alert(
+                subject="直播流可达性已恢复",
+                checks=[{
+                    "name": "流地址可达性",
+                    "status": True,
+                    "detail": f"{ok_count}/{total} 可达（{ratio:.0%}）",
+                }],
+                level='info',
+            )
+        MonitorUtils._stream_last_status = current
 
     # 邮件 HTML 模板路径（从文件加载，便于后期维护样式而不改代码）
     TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), 'templates', 'email_alert.html')
@@ -273,6 +411,23 @@ class MonitorScheduler:
     """健康监控定时调度（复刻 utils.py SchedulerUtils 与 aggregator AggregatorScheduler 写法）"""
 
     @staticmethod
+    def _window_wait_seconds(now=None):
+        """
+        计算距离检测时段的等待秒数（GMT+8）
+        :param now: 当前时间（可注入便于测试）；默认取当前 GMT+8 时间
+        :return: 检测时段内返回 0；0:00-7:59 返回睡到下一个 8:00 的秒数
+        """
+        now = now or datetime.datetime.now(tz=GMT8)
+        if CHECK_WINDOW_START_HOUR <= now.hour < CHECK_WINDOW_END_HOUR:
+            return 0
+        # 非检测时段（0:00-7:59）：先取当天 8:00，若已过（不可能）则顺延到明天
+        next_start = now.replace(
+            hour=CHECK_WINDOW_START_HOUR, minute=0, second=0, microsecond=0)
+        if next_start <= now:
+            next_start += datetime.timedelta(days=1)
+        return int((next_start - now).total_seconds())
+
+    @staticmethod
     def schedule_monitor():
         """
         启动 daemon 线程，定时执行健康检测
@@ -281,11 +436,16 @@ class MonitorScheduler:
 
         def monitor_loop():
             # 首次启动延迟，等聚合任务跑完首次，避免启动初期频道数未达阈值误报
-            print(f"健康监控将在 {STARTUP_DELAY} 秒后开始")
+            print(f"健康监控将在 {STARTUP_DELAY} 秒后开始（检测时段：GMT+8 {CHECK_WINDOW_START_HOUR}:00-{CHECK_WINDOW_END_HOUR}:00）")
             time.sleep(STARTUP_DELAY)
 
             while True:
                 try:
+                    wait = MonitorScheduler._window_wait_seconds()
+                    if wait > 0:
+                        print(f"非检测时段，等待 {wait / 3600:.1f} 小时后恢复检测")
+                        time.sleep(wait)
+                        continue
                     MonitorUtils.run_check_once()
                 except Exception as e:
                     print(f"健康检测循环出错: {str(e)}")
@@ -293,3 +453,23 @@ class MonitorScheduler:
 
         monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
         monitor_thread.start()
+
+        # 流地址可达性低频全量探测线程（10 分钟一轮，独立状态机）
+        def stream_loop():
+            # 首次延迟比常规检测稍久，等聚合缓存生成
+            time.sleep(STARTUP_DELAY + 30)
+            print(f"流地址全量探测将在 {STARTUP_DELAY + 30} 秒后开始，之后每 {STREAM_CHECK_INTERVAL} 秒一轮")
+            while True:
+                try:
+                    wait = MonitorScheduler._window_wait_seconds()
+                    if wait > 0:
+                        print(f"非检测时段，流探测等待 {wait / 3600:.1f} 小时后恢复")
+                        time.sleep(wait)
+                        continue
+                    MonitorUtils.run_stream_check_once()
+                except Exception as e:
+                    print(f"流探测循环出错: {str(e)}")
+                time.sleep(STREAM_CHECK_INTERVAL)
+
+        stream_thread = threading.Thread(target=stream_loop, daemon=True)
+        stream_thread.start()

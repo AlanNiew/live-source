@@ -41,6 +41,8 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 - 默认自检地址 `localhost:5002`（monitor 跑在容器内部，用 gunicorn 监听端口；宿主机映射端口 `15002` 在容器内连不上）。若未来加 nginx 反代，需设 `MONITOR_HEALTH_URL` 等环境变量指向反代入口
 - `MIN_CHANNEL_COUNT=30`：正常聚合约 55 频道，若公开源全挂只剩 hntv 约 15，会触发告警
+- 常规检测 60s 一轮（health/m3u 列表/epg）；另有**低频全量流探测线程**：每 10 分钟并发探测聚合列表里所有流地址可达性（GET+Range 读少量字节），可达率 < `STREAM_MIN_HEALTH_RATIO=0.8` 判异常，独立状态机发独立告警邮件（不并入常规状态机）
+- **检测时段**：仅 GMT+8 8:00-24:00 检测（`CHECK_WINDOW_START_HOUR/END_HOUR`），0:00-7:59 两个循环都休眠到下一个 8:00（`_window_wait_seconds`，按 GMT+8 判断，不依赖容器时区）
 - 邮件模板在 `templates/email_alert.html`（占位符填充，`_build_html`）
 
 ## 已知坑
