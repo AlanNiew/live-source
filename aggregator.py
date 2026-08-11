@@ -1,7 +1,9 @@
+import json
 import os
 import re
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from dotenv import load_dotenv
@@ -30,6 +32,14 @@ AGGREGATED_M3U_PATH = os.path.join(XML_DATA_DIR, "aggregated.m3u")
 
 # 聚合刷新间隔（秒）——每 6 小时刷新一次公开源
 AGGREGATE_REFRESH_INTERVAL = 6 * 60 * 60
+
+# 聚合时探测过滤不可达源（连续两轮失败才丢弃，避免源瞬时抖动被误杀）
+FILTER_UNREACHABLE = True            # 总开关
+STREAM_FAILURES_PATH = os.path.join(XML_DATA_DIR, "stream_failures.json")  # 跨轮失败记录
+STREAM_FAIL_LIMIT = 2                # 连续失败 N 轮才丢弃
+STREAM_PROBE_TIMEOUT = 8             # 单流探测超时（秒）
+STREAM_PROBE_CONCURRENCY = 10        # 并发探测数
+STREAM_PROBE_UA = 'hntv-api-aggregator'
 
 # CCTV 开路频道中文标准名映射（编号 -> 中文副名）
 # 依据央视官方频道名；付费/专业频道（台球/高尔夫/风暴等）不在此表，会被过滤掉
@@ -235,6 +245,112 @@ class AggregatorUtils:
         return normalized
 
     @staticmethod
+    def probe_stream_loose(url):
+        """
+        宽松探测单个流地址：GET + Range 读少量字节即断开。
+        宽松判定：200/206/403 均算可达（403 可能是探测特征被拒但播放器能放），
+        仅超时/连接拒绝/404/5xx 视为不可达
+        :param url: 流地址
+        :return: True 可达 / False 不可达
+        """
+        r = None
+        try:
+            r = requests.get(
+                url, timeout=STREAM_PROBE_TIMEOUT, stream=True,
+                headers={'Range': 'bytes=0-1024', 'User-Agent': STREAM_PROBE_UA},
+            )
+            if r.status_code in (200, 206, 403):
+                try:
+                    return bool(next(r.iter_content(1024)))
+                except StopIteration:
+                    return False
+            return False
+        except Exception:
+            return False
+        finally:
+            if r is not None:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _load_failures():
+        """读取跨轮失败记录 {url: 连续失败次数}；文件不存在或损坏返回空 dict"""
+        try:
+            if os.path.exists(STREAM_FAILURES_PATH):
+                with open(STREAM_FAILURES_PATH, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data if isinstance(data, dict) else {}
+        except Exception as e:
+            print(f"读取失败记录出错: {str(e)}")
+        return {}
+
+    @staticmethod
+    def _save_failures(failures):
+        """保存失败记录，只保留本轮出现过的 URL（自动裁剪过期项）"""
+        try:
+            os.makedirs(XML_DATA_DIR, exist_ok=True)
+            with open(STREAM_FAILURES_PATH, 'w', encoding='utf-8') as f:
+                json.dump(failures, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存失败记录出错: {str(e)}")
+
+    @staticmethod
+    def _filter_unreachable(merged, order, hntv_keys):
+        """
+        对合并结果做可达性探测过滤（仅公开源补充的频道）：
+        - 宽松判定探测；本轮不可达计数+1，连续 STREAM_FAIL_LIMIT 轮失败才丢弃
+        - 本轮可达清空计数
+        - hntv 官方频道跳过，永不因探测被过滤
+        :param merged: key -> 频道 dict
+        :param order: 频道 key 顺序列表（会被就地修改）
+        :param hntv_keys: hntv 官方频道 key 集合
+        :return: 本轮探测过的 url 集合（用于裁剪失败记录）
+        """
+        if not FILTER_UNREACHABLE:
+            return set()
+
+        # 只探测公开源补充的频道
+        probe_keys = [k for k in order if k not in hntv_keys]
+        urls = {k: merged[k]["url"] for k in probe_keys}
+
+        failures = AggregatorUtils._load_failures()
+        probed_urls = set(urls.values())
+
+        # 并发探测
+        results = {}
+        with ThreadPoolExecutor(max_workers=STREAM_PROBE_CONCURRENCY) as executor:
+            for url, ok in zip(urls.values(), executor.map(AggregatorUtils.probe_stream_loose, urls.values())):
+                results[url] = ok
+
+        dropped = []
+        for key in probe_keys:
+            url = urls[key]
+            if results[url]:
+                # 可达：清空失败计数
+                failures.pop(url, None)
+            else:
+                # 不可达：计数 +1，达到阈值才丢弃
+                failures[url] = failures.get(url, 0) + 1
+                if failures[url] >= STREAM_FAIL_LIMIT:
+                    dropped.append(key)
+
+        for key in dropped:
+            order.remove(key)
+            del merged[key]
+        if dropped:
+            print(f"探测过滤：丢弃 {len(dropped)} 个连续 {STREAM_FAIL_LIMIT} 轮不可达的频道")
+            for key in dropped:
+                print(f"  丢弃: {key}")
+
+        # 保存失败记录（只保留本轮探测过的 URL，自动裁剪过期项）
+        failures = {u: c for u, c in failures.items() if u in probed_urls}
+        AggregatorUtils._save_failures(failures)
+
+        return probed_urls
+
+    @staticmethod
     def aggregate_m3u(hntv_channels, public_channels):
         """
         合并 hntv 官方频道与公开源频道：
@@ -279,6 +395,10 @@ class AggregatorUtils:
         # 稳定排序，同组内保持原有相对顺序
         GROUP_ORDER = {"河南卫视": 0, "央视": 1, "卫视": 2}
         order.sort(key=lambda k: GROUP_ORDER.get(merged[k]["group_title"], 3))
+
+        # 探测过滤：公开源补充频道连续两轮不可达才丢弃（hntv 官方源跳过）
+        hntv_keys = {AggregatorUtils.normalize_name(ch["name"]) for ch in hntv_channels}
+        AggregatorUtils._filter_unreachable(merged, order, hntv_keys)
 
         # 生成 m3u 文本
         m3u_content = "#EXTM3U\n\n"
