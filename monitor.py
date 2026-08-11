@@ -1,7 +1,9 @@
 import os
+import re
 import time
 import threading
 import datetime
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -36,8 +38,22 @@ STARTUP_DELAY = 90           # 首次检测延迟（秒）：等聚合任务跑�
 STREAM_CHECK_INTERVAL = 1800        # 全量流探测间隔（秒），30 分钟一轮
 STREAM_CHECK_CONCURRENCY = 10       # 并发探测数
 STREAM_PROBE_TIMEOUT = 8            # 单流探测超时（秒）
-STREAM_MIN_HEALTH_RATIO = 0.5       # 可达率阈值，低于此值判异常（运营商内网 IP 流稳定不可达，0.8 过高）
 STREAM_USER_AGENT = 'hntv-api-monitor'
+
+# 分组可达率阈值（按用户对分组的重要性分级）：
+# - 河南卫视（官方源，权重最高）：低于 90% 告警
+# - 央视（iptv-org 源，稳定）：低于 80% 告警
+# - 地方卫视（免费源，可达率天然低）：低于 20% 才告警
+GROUP_HEALTH_RATIOS = {
+    "河南卫视": 0.9,
+    "央视": 0.8,
+    "卫视": 0.2,
+}
+DEFAULT_GROUP_RATIO = 0.5           # 未配置分组的兜底阈值
+
+# 参与邮件告警的分组：卫视组健康率低是常态，目前只检测并在日志展示，
+# 不触发告警邮件；河南卫视/央视异常才发邮件
+ALERT_GROUPS = ("河南卫视", "央视")
 
 
 class MonitorUtils:
@@ -106,21 +122,23 @@ class MonitorUtils:
         """
         拉取聚合 m3u 文本并解析出所有流地址
         只统计 http(s) 流：rtmp 等非 HTTP 协议 requests 无法探测，跳过不计入分母
-        :return: 流地址列表；拉取失败返回空列表
+        :return: (url, group) 列表；拉取失败返回空列表
         """
         try:
             r = requests.get(M3U_URL, timeout=10)
             if r.status_code != 200:
                 return []
-            urls = []
+            items = []
+            cur_group = "其他"
             for line in r.text.splitlines():
                 line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if not (line.startswith('http://') or line.startswith('https://')):
-                    continue
-                urls.append(line)
-            return urls
+                if line.startswith('#EXTINF'):
+                    m = re.search(r'group-title="([^"]*)"', line)
+                    if m:
+                        cur_group = m.group(1)
+                elif line.startswith(('http://', 'https://')):
+                    items.append((line, cur_group))
+            return items
         except Exception as e:
             print(f"流地址解析请求失败: {str(e)}")
             return []
@@ -157,42 +175,69 @@ class MonitorUtils:
     @staticmethod
     def check_streams():
         """
-        全量并发探测聚合列表中的流地址
+        全量并发探测聚合列表中的流地址（不分组的整体统计）
         :return: (可达数, 总数)；列表拉不到时返回 (0, 0)
         """
-        urls = MonitorUtils.fetch_m3u_urls()
-        if not urls:
+        items = MonitorUtils.fetch_m3u_urls()
+        if not items:
             return 0, 0
         ok = 0
         with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
-            for result in executor.map(MonitorUtils.probe_stream, urls):
+            for result in executor.map(MonitorUtils.probe_stream, [u for u, _ in items]):
                 if result:
                     ok += 1
-        return ok, len(urls)
+        return ok, len(items)
 
     @staticmethod
     def run_stream_check_once():
         """
-        执行一次全量流探测，按独立状态机决定是否发邮件（翻转才发）：
-        - OK → FAIL：发"直播流可达性异常"告警
+        执行一次全量流探测，按分组可达率阈值判定（河南卫视 90% / 央视 80% / 卫视 20%）：
+        任一组低于其阈值即整体 FAIL，按独立状态机决定是否发邮件（翻转才发）：
+        - OK → FAIL：发"直播流可达性异常"告警（邮件列出各组明细）
         - FAIL → OK：发恢复通知
         - 持续同态：不发（避免轰炸）
-        独立于 run_check_once 的常规状态机，低频运行（10 分钟一轮）
+        独立于 run_check_once 的常规状态机，低频运行（30 分钟一轮）
         """
-        ok_count, total = MonitorUtils.check_streams()
-        if total == 0:
+        items = MonitorUtils.fetch_m3u_urls()
+        if not items:
             current = "FAIL"
-            ratio = 0.0
             print("流探测异常：聚合列表拉取失败或无流地址")
+            checks = [{
+                "name": "流地址可达性",
+                "status": False,
+                "detail": "聚合列表拉取失败或无流地址",
+            }]
         else:
-            ratio = ok_count / total
-            current = "OK" if ratio >= STREAM_MIN_HEALTH_RATIO else "FAIL"
-            print(f"流探测：{ok_count}/{total} 可达（{ratio:.0%}）")
+            # 并发探测所有流
+            with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
+                results = list(executor.map(MonitorUtils.probe_stream, [u for u, _ in items]))
+            # 按分组统计
+            groups = defaultdict(lambda: [0, 0])  # group -> [可达数, 总数]
+            for (url, group), ok in zip(items, results):
+                groups[group][1] += 1
+                if ok:
+                    groups[group][0] += 1
+            # 逐组判定：低于分组阈值即不达标（卫视组只展示不参与告警）
+            checks = []
+            all_ok = True
+            for group, (ok_count, total) in groups.items():
+                ratio = ok_count / total
+                threshold = GROUP_HEALTH_RATIOS.get(group, DEFAULT_GROUP_RATIO)
+                group_ok = ratio >= threshold
+                if group in ALERT_GROUPS and not group_ok:
+                    all_ok = False
+                checks.append({
+                    "name": f"{group}（阈值 {threshold:.0%}）",
+                    "status": group_ok,
+                    "detail": f"{ok_count}/{total} 可达（{ratio:.0%}）",
+                })
+            current = "OK" if all_ok else "FAIL"
+            for c in checks:
+                print(f"流探测 [{c['name']}]: {'达标' if c['status'] else '不达标'} - {c['detail']}")
 
         if current == "FAIL":
             MonitorUtils._stream_fail_count += 1
-            print(f"流探测异常（连续第 {MonitorUtils._stream_fail_count} 次）："
-                  f"可达率 {ratio:.0%}，低于阈值 {STREAM_MIN_HEALTH_RATIO:.0%}")
+            print(f"流探测异常（连续第 {MonitorUtils._stream_fail_count} 次）")
         else:
             MonitorUtils._stream_fail_count = 0
 
@@ -200,22 +245,14 @@ class MonitorUtils:
         if current == "FAIL" and MonitorUtils._stream_last_status == "OK":
             MonitorUtils.send_alert(
                 subject="直播流可达性异常",
-                checks=[{
-                    "name": "流地址可达性",
-                    "status": False,
-                    "detail": f"{ok_count}/{total} 可达（{ratio:.0%}），低于阈值 {STREAM_MIN_HEALTH_RATIO:.0%}",
-                }],
+                checks=checks,
                 level='error',
                 extra_info={"连续失败次数": f"第 {MonitorUtils._stream_fail_count} 次"},
             )
         elif current == "OK" and MonitorUtils._stream_last_status == "FAIL":
             MonitorUtils.send_alert(
                 subject="直播流可达性已恢复",
-                checks=[{
-                    "name": "流地址可达性",
-                    "status": True,
-                    "detail": f"{ok_count}/{total} 可达（{ratio:.0%}）",
-                }],
+                checks=checks,
                 level='info',
             )
         MonitorUtils._stream_last_status = current
