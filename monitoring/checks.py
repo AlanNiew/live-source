@@ -3,8 +3,8 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-from config import (ALERT_GROUPS, DEFAULT_GROUP_RATIO, EPG_URL,
-                    GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
+from config import (ALERT_GROUPS, DEFAULT_GROUP_NAME, DEFAULT_GROUP_RATIO,
+                    EPG_URL, GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
                     MIN_CHANNEL_COUNT, STREAM_CHECK_CONCURRENCY)
 from core.probing import probe_stream
 from core.sources import SourceUtils
@@ -88,7 +88,7 @@ class CheckUtils:
             if r.status_code != 200:
                 return []
             items = []
-            cur_group = "其他"
+            cur_group = DEFAULT_GROUP_NAME
             for line in r.text.splitlines():
                 line = line.strip()
                 if line.startswith('#EXTINF'):

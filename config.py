@@ -55,6 +55,8 @@ STREAM_FAIL_LIMIT = 2                # 连续失败 N 轮才丢弃
 
 # hntv 官方频道的分组名（降级路径与聚合路径共用，避免魔法字符串）
 HNTV_GROUP_NAME = "河南卫视"
+# 未识别分组时的默认组名
+DEFAULT_GROUP_NAME = "其他"
 
 # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后），其余兜底
 GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2}

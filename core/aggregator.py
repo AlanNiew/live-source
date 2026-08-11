@@ -27,10 +27,10 @@ class AggregatorUtils:
         streams = item.get('video_streams') or item.get('streams', [])
         if not streams:
             return None
+        # 数据层只保留原始 cid；tvg-id 的显示值（str(cid) 兜底 name 或直拼）由各输出点决定
         return {
             "name": name,
-            "cid": cid,  # 原始 cid（降级路径 tvg-id 需直拼，保持与旧版一致）
-            "tvg_name": str(cid) if cid is not None else name,
+            "cid": cid,
             "group_title": HNTV_GROUP_NAME,
             "url": streams[0],
         }
@@ -116,8 +116,13 @@ class AggregatorUtils:
         m3u_content = "#EXTM3U\n\n"
         for key in order:
             ch = merged[key]
+            # tvg-id/tvg-name 取值：hntv 官方频道用 cid（str 兜底 name），公开源频道用其 tvg_name
+            if "cid" in ch:
+                tvg_id = str(ch["cid"]) if ch["cid"] is not None else ch["name"]
+            else:
+                tvg_id = ch["tvg_name"]
             m3u_content += (
-                f'#EXTINF:-1 tvg-id="{ch["tvg_name"]}" tvg-name="{ch["tvg_name"]}" '
+                f'#EXTINF:-1 tvg-id="{tvg_id}" tvg-name="{tvg_id}" '
                 f'group-title="{ch["group_title"]}",{ch["name"]}\n'
                 f'{ch["url"]}\n\n'
             )
@@ -268,7 +273,8 @@ class AggregatorUtils:
             for item in data:
                 ch = AggregatorUtils._extract_hntv_item(item)
                 if ch:
-                    # tvg-id 直拼原始 cid（含 None 时输出 "None"，与旧版逐字节一致）
+                    # tvg-id 直拼原始 cid（f-string 对 None 输出 "None" 字符串，
+                    # 与旧版逐字节一致，tests/test_equivalence.py 已锁定）
                     m3u_content += (
                         f'#EXTINF:-1 tvg-id="{ch["cid"]}" tvg-name="{ch["name"]}" '
                         f'group-title="{HNTV_GROUP_NAME}",{ch["name"]}\n'

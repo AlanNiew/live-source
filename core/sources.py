@@ -3,7 +3,8 @@ import re
 
 import requests
 
-from config import CARRIER_IP_PREFIXES, CCTV_NAME_MAP, PUBLIC_M3U_SOURCES, SIGN_PARAM_PAT
+from config import (CARRIER_IP_PREFIXES, CCTV_NAME_MAP, DEFAULT_GROUP_NAME,
+                    PUBLIC_M3U_SOURCES, SIGN_PARAM_PAT)
 
 
 class SourceUtils:
@@ -37,22 +38,24 @@ class SourceUtils:
         return channels
 
     @staticmethod
-    def extract_group_title(extinf_line, default=None):
+    def extract_group_title(extinf_line):
         """
         从 EXTINF 行提取 group-title 属性（解析 m3u 的共享辅助）
         :param extinf_line: #EXTINF 行文本
-        :param default: 无 group-title 时返回的默认值（None 表示"未指定"，
-                        调用方自行决定兜底语义：parse 用"其他"，监控用沿用上一组）
-        :return: group 名或默认值
+        :return: group 名；未指定时返回 None，由调用方决定兜底语义
+                （parse 用 DEFAULT_GROUP_NAME，监控用沿用上一组）
         """
         m = re.search(r'group-title="([^"]*)"', extinf_line)
-        return m.group(1) if m else default
+        return m.group(1) if m else None
 
     @staticmethod
     def iter_m3u_entries(m3u_text):
         """
         迭代 m3u 文本，产出 (EXTINF 行, 播放地址行) 条目
-        共享的行级解析核心（parse_m3u_channels 与监控探测共用）
+        条目配对模型：供 parse_m3u_channels 使用。
+        注意：监控探测（monitoring/checks.py:fetch_m3u_groups）因需要
+        行级状态机语义（缺 group-title 沿用上一组、裸 URL 行收集），
+        自建行扫描，不使用本生成器
         :param m3u_text: m3u 原始文本
         :yield: (EXTINF 行字符串, 播放地址行)
         """
@@ -84,7 +87,7 @@ class SourceUtils:
 
             # 解析 tvg-name / group-title 属性
             tvg_name = ""
-            group_title = SourceUtils.extract_group_title(line, default="其他")
+            group_title = SourceUtils.extract_group_title(line) or DEFAULT_GROUP_NAME
 
             tvg_match = re.search(r'tvg-name="([^"]*)"', line)
             if tvg_match:
