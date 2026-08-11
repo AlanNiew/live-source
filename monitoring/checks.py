@@ -1,10 +1,8 @@
 """健康检测项：服务存活/直播列表/EPG/流探测，含常规与流探测两套状态机"""
-import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
-
 from config import (ALERT_GROUPS, DEFAULT_GROUP_RATIO, EPG_URL,
                     GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
                     MIN_CHANNEL_COUNT, STREAM_CHECK_CONCURRENCY)
@@ -81,6 +79,8 @@ class CheckUtils:
         """
         拉取聚合 m3u 文本并解析出 (url, group) 列表
         只统计 http(s) 流：rtmp 等非 HTTP 协议 requests 无法探测，跳过不计入分母
+        行级状态机语义（与旧版逐行等价）：EXTINF 行更新当前 group（缺 group-title
+        则沿用上一组）；任何裸 http(s) 行都收集并归属当前 group
         :return: (url, group) 列表；拉取失败返回空列表
         """
         try:
@@ -88,11 +88,15 @@ class CheckUtils:
             if r.status_code != 200:
                 return []
             items = []
-            for extinf, url in SourceUtils.iter_m3u_entries(r.text):
-                if not url.startswith(('http://', 'https://')):
-                    continue
-                m = re.search(r'group-title="([^"]*)"', extinf)
-                items.append((url, m.group(1) if m else "其他"))
+            cur_group = "其他"
+            for line in r.text.splitlines():
+                line = line.strip()
+                if line.startswith('#EXTINF'):
+                    group = SourceUtils.extract_group_title(line)
+                    if group is not None:
+                        cur_group = group
+                elif line.startswith(('http://', 'https://')):
+                    items.append((line, cur_group))
             return items
         except Exception as e:
             print(f"流地址解析请求失败: {str(e)}")

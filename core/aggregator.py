@@ -4,8 +4,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from config import (AGGREGATED_M3U_PATH, FILTER_UNREACHABLE, GROUP_ORDER,
-                    STREAM_CHECK_CONCURRENCY, STREAM_FAILURES_PATH,
-                    STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE, XML_DATA_DIR)
+                    HNTV_GROUP_NAME, STREAM_CHECK_CONCURRENCY,
+                    STREAM_FAILURES_PATH, STREAM_FAIL_LIMIT,
+                    STREAM_PROBE_UA_LOOSE, XML_DATA_DIR)
 from core.hntv_client import ApiUtils
 from core.probing import probe_stream
 from core.sources import SourceUtils
@@ -28,8 +29,9 @@ class AggregatorUtils:
             return None
         return {
             "name": name,
+            "cid": cid,  # 原始 cid（降级路径 tvg-id 需直拼，保持与旧版一致）
             "tvg_name": str(cid) if cid is not None else name,
-            "group_title": "河南卫视",
+            "group_title": HNTV_GROUP_NAME,
             "url": streams[0],
         }
 
@@ -266,9 +268,10 @@ class AggregatorUtils:
             for item in data:
                 ch = AggregatorUtils._extract_hntv_item(item)
                 if ch:
+                    # tvg-id 直拼原始 cid（含 None 时输出 "None"，与旧版逐字节一致）
                     m3u_content += (
-                        f'#EXTINF:-1 tvg-id="{ch["tvg_name"]}" tvg-name="{ch["name"]}" '
-                        f'group-title="河南卫视",{ch["name"]}\n'
+                        f'#EXTINF:-1 tvg-id="{ch["cid"]}" tvg-name="{ch["name"]}" '
+                        f'group-title="{HNTV_GROUP_NAME}",{ch["name"]}\n'
                         f'{ch["url"]}\n\n'
                     )
 

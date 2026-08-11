@@ -37,6 +37,18 @@ class SourceUtils:
         return channels
 
     @staticmethod
+    def extract_group_title(extinf_line, default=None):
+        """
+        从 EXTINF 行提取 group-title 属性（解析 m3u 的共享辅助）
+        :param extinf_line: #EXTINF 行文本
+        :param default: 无 group-title 时返回的默认值（None 表示"未指定"，
+                        调用方自行决定兜底语义：parse 用"其他"，监控用沿用上一组）
+        :return: group 名或默认值
+        """
+        m = re.search(r'group-title="([^"]*)"', extinf_line)
+        return m.group(1) if m else default
+
+    @staticmethod
     def iter_m3u_entries(m3u_text):
         """
         迭代 m3u 文本，产出 (EXTINF 行, 播放地址行) 条目
@@ -72,15 +84,11 @@ class SourceUtils:
 
             # 解析 tvg-name / group-title 属性
             tvg_name = ""
-            group_title = "其他"
+            group_title = SourceUtils.extract_group_title(line, default="其他")
 
             tvg_match = re.search(r'tvg-name="([^"]*)"', line)
             if tvg_match:
                 tvg_name = tvg_match.group(1)
-
-            group_match = re.search(r'group-title="([^"]*)"', line)
-            if group_match:
-                group_title = group_match.group(1)
 
             # 频道名取 EXTINF 行末尾逗号后的部分
             name = line.split(",")[-1].strip()

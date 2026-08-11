@@ -53,8 +53,11 @@ AGGREGATE_REFRESH_INTERVAL = 6 * 60 * 60
 FILTER_UNREACHABLE = True
 STREAM_FAIL_LIMIT = 2                # 连续失败 N 轮才丢弃
 
+# hntv 官方频道的分组名（降级路径与聚合路径共用，避免魔法字符串）
+HNTV_GROUP_NAME = "河南卫视"
+
 # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后），其余兜底
-GROUP_ORDER = {"河南卫视": 0, "央视": 1, "卫视": 2}
+GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2}
 
 # CCTV 开路频道中文标准名映射（编号 -> 中文副名）
 # 依据央视官方频道名；付费/专业频道（台球/高尔夫/风暴等）不在此表，会被过滤掉
