@@ -113,12 +113,15 @@ class AlertUtils:
                 from_addr=email_addr,
             )
             # 用 HTML 格式发送（绕过纯文本的 send_notification）
-            notifier.send(
+            sent = notifier.send(
                 to_addrs=[email_addr],
                 subject=f"[{'故障告警' if level == 'error' else '服务恢复'}] {subject}",
                 content=html_content,
                 content_type='html',
             )
-            print(f"告警邮件已发送: [{level}] {subject}")
+            if sent:
+                print(f"告警邮件已发送: [{level}] {subject}")
+            else:
+                print(f"告警邮件发送失败: [{level}] {subject}")
         except Exception as e:
             print(f"发送告警邮件出错: {str(e)}")

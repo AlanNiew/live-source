@@ -4,9 +4,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from config import (AGGREGATED_M3U_PATH, FILTER_UNREACHABLE, GROUP_ORDER,
-                    HNTV_GROUP_NAME, STREAM_CHECK_CONCURRENCY,
-                    STREAM_FAILURES_PATH, STREAM_FAIL_LIMIT,
-                    STREAM_PROBE_UA_LOOSE, XML_DATA_DIR)
+                    HNTV_GROUP_NAME, PUBLIC_CHANNELS_CACHE_PATH,
+                    STREAM_CHECK_CONCURRENCY, STREAM_FAILURES_PATH,
+                    STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE, XML_DATA_DIR)
 from core.hntv_client import ApiUtils
 from core.probing import probe_stream
 from core.sources import SourceUtils
@@ -83,9 +83,9 @@ class AggregatorUtils:
         - 按频道名去重，hntv 官方源优先（同名保留官方地址）
         - 公开源只补充 hntv 没有的频道
         - 公开源内同台多个分辨率时，保留清晰度最高的一个
-        - 公开源补充频道做可达性探测过滤（连续两轮失败才丢弃，官方源跳过）
+        注：可达性探测过滤已在 prepare_public_channels 阶段完成（官方源永不探测）
         :param hntv_channels: hntv 官方频道列表（优先级最高）
-        :param public_channels: 公开源频道列表（已过滤+中文化，只补充 hntv 没有的）
+        :param public_channels: 公开源频道列表（已过滤+中文化+探测过滤）
         :return: 合并后的 m3u 文本
         """
         merged = {}
@@ -107,10 +107,6 @@ class AggregatorUtils:
 
         # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后），其余兜底
         order.sort(key=lambda k: GROUP_ORDER.get(merged[k]["group_title"], 3))
-
-        # 探测过滤：公开源补充频道连续两轮不可达才丢弃（hntv 官方源跳过）
-        hntv_keys = {SourceUtils.normalize_name(ch["name"]) for ch in hntv_channels}
-        AggregatorUtils.filter_unreachable(merged, order, hntv_keys)
 
         # 生成 m3u 文本
         m3u_content = "#EXTM3U\n\n"
@@ -156,80 +152,112 @@ class AggregatorUtils:
             print(f"保存失败记录出错: {str(e)}")
 
     @staticmethod
-    def filter_unreachable(merged, order, hntv_keys):
+    def filter_unreachable(channels):
         """
-        对合并结果做可达性探测过滤（仅公开源补充的频道）：
+        对公开源频道列表做可达性探测过滤（仅在 prepare_public_channels 阶段调用）：
         - 宽松判定探测（200/206/403 均可达）；本轮不可达计数+1，
           连续 STREAM_FAIL_LIMIT 轮失败才丢弃，本轮可达清空计数
-        - hntv 官方频道跳过，永不因探测被过滤
-        :param merged: key -> 频道 dict（会被就地修改）
-        :param order: 频道 key 顺序列表（会被就地修改）
-        :param hntv_keys: hntv 官方频道 key 集合
+        - 官方频道不经过本方法（永不因探测被过滤）
+        :param channels: 已择优的公开频道 dict 列表
+        :return: 过滤后的频道列表（连续两轮失败者被剔除，第一轮失败保留）
         """
         if not FILTER_UNREACHABLE:
-            return
+            return channels
 
-        # 只探测公开源补充的频道
-        probe_keys = [k for k in order if k not in hntv_keys]
-        urls = {k: merged[k]["url"] for k in probe_keys}
-
+        urls = [ch["url"] for ch in channels]
         failures = AggregatorUtils._load_failures()
-        probed_urls = set(urls.values())
+        probed_urls = set(urls)
 
         # 并发探测（宽松判定：403 也算可达；用聚合专用 UA 保持历史行为）
         results = {}
         with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
-            for url, ok in zip(urls.values(),
+            for url, ok in zip(urls,
                                executor.map(
                                    lambda u: probe_stream(u, accept_403=True,
                                                          user_agent=STREAM_PROBE_UA_LOOSE),
-                                   urls.values())):
+                                   urls)):
                 results[url] = ok
 
+        kept = []
         dropped = []
-        for key in probe_keys:
-            url = urls[key]
+        for ch in channels:
+            url = ch["url"]
             if results[url]:
                 failures.pop(url, None)
+                kept.append(ch)
             else:
                 failures[url] = failures.get(url, 0) + 1
                 if failures[url] >= STREAM_FAIL_LIMIT:
-                    dropped.append(key)
+                    dropped.append(ch)
+                else:
+                    kept.append(ch)  # 第一轮失败保留，给第二次机会
 
-        for key in dropped:
-            order.remove(key)
-            del merged[key]
         if dropped:
             print(f"探测过滤：丢弃 {len(dropped)} 个连续 {STREAM_FAIL_LIMIT} 轮不可达的频道")
-            for key in dropped:
-                print(f"  丢弃: {key}")
+            for ch in dropped:
+                print(f"  丢弃: {ch['name']}")
 
         # 保存失败记录（只保留本轮探测过的 URL，自动裁剪过期项）
         failures = {u: c for u, c in failures.items() if u in probed_urls}
         AggregatorUtils._save_failures(failures)
+        return kept
 
     # ------------------------------------------------------------ 缓存落盘
 
     @staticmethod
+    def prepare_public_channels():
+        """
+        准备公开源频道：拉源 -> 过滤中文化 -> 同台择优 -> 探测过滤
+        :return: 过滤后的公开频道 dict 列表
+        """
+        public_channels = SourceUtils.fetch_all_public_channels()
+        public_channels = SourceUtils.filter_and_translate(public_channels)
+        # 同台择优（每台一个），再探测过滤
+        best = AggregatorUtils.pick_best_public(public_channels)
+        best_list = [ch for ch, _score, _res in best.values()]
+        return AggregatorUtils.filter_unreachable(best_list)
+
+    @staticmethod
+    def _save_public_channels(channels):
+        """保存公开源频道缓存（官方源高频刷新时复用）"""
+        try:
+            os.makedirs(XML_DATA_DIR, exist_ok=True)
+            with open(PUBLIC_CHANNELS_CACHE_PATH, 'w', encoding='utf-8') as f:
+                json.dump(channels, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存公开源缓存出错: {str(e)}")
+
+    @staticmethod
+    def _load_public_channels():
+        """
+        读取公开源频道缓存；文件不存在或损坏返回 None
+        :return: 频道列表或 None
+        """
+        try:
+            if os.path.exists(PUBLIC_CHANNELS_CACHE_PATH):
+                with open(PUBLIC_CHANNELS_CACHE_PATH, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data if isinstance(data, list) else None
+        except Exception as e:
+            print(f"读取公开源缓存出错: {str(e)}")
+        return None
+
+    @staticmethod
     def get_aggregated_m3u():
         """
-        拉取所有源并合并，落盘到缓存文件
+        完整聚合刷新（公开源低频，6h 一轮）：拉取所有源并合并，落盘缓存
         :return: 聚合后的 m3u 文本；失败时返回 None
         """
         try:
             # 1. 拉取 hntv 官方频道
             hntv_channels = AggregatorUtils.fetch_hntv_channels()
 
-            # 2. 拉取公开源频道
-            public_channels = SourceUtils.fetch_all_public_channels()
+            # 2. 准备公开源频道（拉源+过滤+择优+探测过滤）并缓存
+            public_channels = AggregatorUtils.prepare_public_channels()
+            AggregatorUtils._save_public_channels(public_channels)
 
-            # 3. 过滤+中文化（只保留央视开路+卫视，英文名转中文）
-            public_channels = SourceUtils.filter_and_translate(public_channels)
-
-            # 4. 合并去重 + 探测过滤
+            # 3. 合并生成 m3u 并落盘
             m3u_content = AggregatorUtils.aggregate_m3u(hntv_channels, public_channels)
-
-            # 5. 落盘缓存
             os.makedirs(XML_DATA_DIR, exist_ok=True)
             with open(AGGREGATED_M3U_PATH, 'w', encoding='utf-8') as f:
                 f.write(m3u_content)
@@ -238,6 +266,32 @@ class AggregatorUtils:
             return m3u_content
         except Exception as e:
             print(f"生成聚合 m3u 出错: {str(e)}")
+            return None
+
+    @staticmethod
+    def refresh_official_only():
+        """
+        官方源高频刷新（1h 一轮）：只拉 hntv 官方频道，复用公开源缓存重新合并。
+        官方接口签名有时效，需高频刷新保持新鲜；不拉公开源、不重复探测。
+        公开源缓存未就绪时回退完整聚合。
+        :return: 聚合后的 m3u 文本；失败时返回 None
+        """
+        try:
+            hntv_channels = AggregatorUtils.fetch_hntv_channels()
+
+            public_channels = AggregatorUtils._load_public_channels()
+            if public_channels is None:
+                print("公开源缓存未就绪，回退完整聚合")
+                return AggregatorUtils.get_aggregated_m3u()
+
+            m3u_content = AggregatorUtils.aggregate_m3u(hntv_channels, public_channels)
+            os.makedirs(XML_DATA_DIR, exist_ok=True)
+            with open(AGGREGATED_M3U_PATH, 'w', encoding='utf-8') as f:
+                f.write(m3u_content)
+            print(f"官方源刷新完成，已更新 {AGGREGATED_M3U_PATH}（hntv {len(hntv_channels)} 个 + 公开 {len(public_channels)} 个）")
+            return m3u_content
+        except Exception as e:
+            print(f"官方源刷新出错: {str(e)}")
             return None
 
     @staticmethod

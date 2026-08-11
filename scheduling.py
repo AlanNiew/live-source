@@ -8,7 +8,7 @@ import datetime
 import threading
 import time
 
-from config import AGGREGATE_REFRESH_INTERVAL, GMT8
+from config import AGGREGATE_REFRESH_INTERVAL, GMT8, OFFICIAL_REFRESH_INTERVAL
 from core.aggregator import AggregatorUtils
 from core.epg import XmlUtils
 from monitoring.scheduler import MonitorScheduler
@@ -39,21 +39,39 @@ def schedule_daily_xml_update():
 
 
 def schedule_aggregate_refresh():
-    """每 6 小时刷新一次多源聚合结果（启动时立即执行一次）"""
-
-    def refresh_loop():
+    """
+    聚合刷新（双频率）：
+    - 公开源线程：启动立即 + 每 6h 拉公开源/探测过滤/合并（get_aggregated_m3u）
+    - 官方源线程：启动立即 + 每 1h 只拉 hntv 官方源刷新签名地址（refresh_official_only）
+    """
+    def public_loop():
         while True:
             try:
                 # 首次启动立即刷新一次，之后按间隔刷新
                 AggregatorUtils.get_aggregated_m3u()
-                print("聚合 m3u 已刷新")
+                print("聚合 m3u 已刷新（公开源）")
                 time.sleep(AGGREGATE_REFRESH_INTERVAL)
             except Exception as e:
                 print(f"定时刷新聚合 m3u 出错: {str(e)}")
                 time.sleep(60)  # 出错后等 1 分钟再试，避免狂跑
 
-    scheduler_thread = threading.Thread(target=refresh_loop, daemon=True)
-    scheduler_thread.start()
+    public_thread = threading.Thread(target=public_loop, daemon=True)
+    public_thread.start()
+
+    def official_loop():
+        # 稍等公开源线程完成首次聚合（公开缓存未就绪时 refresh_official_only 会自动回退全量）
+        time.sleep(10)
+        while True:
+            try:
+                AggregatorUtils.refresh_official_only()
+                print("官方源已刷新")
+                time.sleep(OFFICIAL_REFRESH_INTERVAL)
+            except Exception as e:
+                print(f"官方源刷新出错: {str(e)}")
+                time.sleep(60)
+
+    official_thread = threading.Thread(target=official_loop, daemon=True)
+    official_thread.start()
 
 
 def start_all():

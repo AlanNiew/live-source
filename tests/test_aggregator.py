@@ -40,54 +40,50 @@ class AggregatorFilterTest(unittest.TestCase):
         self.addCleanup(patcher_probe.stop)
 
     def _build(self):
-        merged = {
-            '河南卫视': {'name': '河南卫视', 'url': 'http://official/1.m3u8', 'group_title': '河南卫视'},
-            'CCTV-1 综合': {'name': 'CCTV-1 综合', 'url': 'http://good/cctv1.m3u8', 'group_title': '央视'},
-            '北京卫视': {'name': '北京卫视', 'url': 'http://bad/bjws.m3u8', 'group_title': '卫视'},
-        }
-        order = ['河南卫视', 'CCTV-1 综合', '北京卫视']
-        return merged, order, {'河南卫视'}
+        """公开频道列表（新签名：filter_unreachable 只接收公开频道）"""
+        return [
+            {'name': 'CCTV-1 综合', 'url': 'http://good/cctv1.m3u8', 'group_title': '央视'},
+            {'name': '北京卫视', 'url': 'http://bad/bjws.m3u8', 'group_title': '卫视'},
+        ]
 
     def test_first_fail_kept(self):
-        """第一轮失败：保留，失败计数=1，官方源未被探测"""
-        merged, order, hntv = self._build()
+        """第一轮失败：保留，失败计数=1"""
+        channels = self._build()
         self.results = {'http://bad/bjws.m3u8': False}
         self.probe_mock.reset_mock()
-        AggregatorUtils.filter_unreachable(merged, order, hntv)
-        self.assertIn('北京卫视', merged)
+        kept = AggregatorUtils.filter_unreachable(channels)
+        self.assertEqual(len(kept), 2, "第一轮失败应保留")
         rec = json.load(open(self.fail_path, encoding='utf-8'))
         self.assertEqual(rec.get('http://bad/bjws.m3u8'), 1)
-        # 验证官方源 URL 从未进入探测调用（mock 实际调用记录）
         probed_urls = [c.args[0] for c in self.probe_mock.call_args_list]
-        self.assertNotIn('http://official/1.m3u8', probed_urls)
         self.assertIn('http://bad/bjws.m3u8', probed_urls)
 
     def test_second_fail_dropped(self):
         """连续两轮失败：丢弃（预置第一轮失败计数=1）"""
         json.dump({'http://bad/bjws.m3u8': 1}, open(self.fail_path, 'w', encoding='utf-8'))
-        merged, order, hntv = self._build()
+        channels = self._build()
         self.results = {'http://bad/bjws.m3u8': False}
-        AggregatorUtils.filter_unreachable(merged, order, hntv)
-        self.assertNotIn('北京卫视', merged)
+        kept = AggregatorUtils.filter_unreachable(channels)
+        self.assertEqual([c['name'] for c in kept], ['CCTV-1 综合'])
         rec = json.load(open(self.fail_path, encoding='utf-8'))
         self.assertEqual(rec.get('http://bad/bjws.m3u8'), 2)
 
     def test_recover_clears_count(self):
         """恢复可达：保留并清空计数"""
         json.dump({'http://bad/bjws.m3u8': 1}, open(self.fail_path, 'w', encoding='utf-8'))
-        merged, order, hntv = self._build()
+        channels = self._build()
         self.results = {'http://bad/bjws.m3u8': True}
-        AggregatorUtils.filter_unreachable(merged, order, hntv)
-        self.assertIn('北京卫视', merged)
+        kept = AggregatorUtils.filter_unreachable(channels)
+        self.assertEqual(len(kept), 2)
         rec = json.load(open(self.fail_path, encoding='utf-8'))
         self.assertNotIn('http://bad/bjws.m3u8', rec)
 
     def test_stale_record_pruned(self):
         """源里不再出现的 URL 失败记录被裁剪"""
         json.dump({'http://old/gone.m3u8': 2}, open(self.fail_path, 'w', encoding='utf-8'))
-        merged, order, hntv = self._build()
+        channels = self._build()
         self.results = {'http://bad/bjws.m3u8': True}
-        AggregatorUtils.filter_unreachable(merged, order, hntv)
+        AggregatorUtils.filter_unreachable(channels)
         rec = json.load(open(self.fail_path, encoding='utf-8'))
         self.assertNotIn('http://old/gone.m3u8', rec)
 

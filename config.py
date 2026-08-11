@@ -31,6 +31,8 @@ XML_FILE_PATH = os.path.join(XML_DATA_DIR, 'live.xml')
 GZ_FILE_PATH = os.path.join(XML_DATA_DIR, 'live.xml.gz')
 AGGREGATED_M3U_PATH = os.path.join(XML_DATA_DIR, 'aggregated.m3u')
 STREAM_FAILURES_PATH = os.path.join(XML_DATA_DIR, 'stream_failures.json')
+# 公开源过滤+探测后的频道缓存（官方源 1h 高频刷新时复用，避免频繁拉公开源与重复探测）
+PUBLIC_CHANNELS_CACHE_PATH = os.path.join(XML_DATA_DIR, 'public_channels.json')
 EMAIL_TEMPLATE_PATH = os.path.join(BASE_DIR, 'templates', 'email_alert.html')
 EMAIL_MODULE_PATH = os.path.join(BASE_DIR, 'email', 'send_assistant.py')
 
@@ -46,8 +48,10 @@ PUBLIC_M3U_SOURCES = [
     "https://cdn.jsdelivr.net/gh/wwb521/live@main/tv.m3u",
 ]
 
-# 聚合刷新间隔（秒）——每 6 小时刷新一次公开源
+# 聚合刷新间隔（秒）——公开源部分每 6 小时刷新一次（含探测过滤）
 AGGREGATE_REFRESH_INTERVAL = 6 * 60 * 60
+# HNTV 官方源刷新间隔（秒）——官方接口签名有时效，需高频刷新保持新鲜
+OFFICIAL_REFRESH_INTERVAL = 60 * 60
 
 # 聚合时探测过滤不可达源（连续两轮失败才丢弃，避免源瞬时抖动被误杀）
 FILTER_UNREACHABLE = True

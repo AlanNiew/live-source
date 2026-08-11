@@ -1,4 +1,5 @@
 import smtplib
+from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Optional, Union
@@ -84,7 +85,8 @@ class EmailNotifier:
 
         msg['From'] = self.from_addr
         msg['To'] = ', '.join(to_addrs)
-        msg['Subject'] = subject
+        # 主题可能含中文，需显式 RFC2047 编码（Python 3.9 直接赋值非 ASCII 会报 ascii codec 错误）
+        msg['Subject'] = Header(subject, 'utf-8')
 
         # 添加抄送
         if cc_addrs:
