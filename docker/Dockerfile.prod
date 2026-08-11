@@ -3,8 +3,10 @@ FROM python:3.9-slim
 
 # 容器时区设为上海（代码内所有定时/EPG 均按 GMT+8，日志时间也随系统时区显示）
 # tzdata 保证 TZ 环境变量生效；apt 走清华源加速国内构建
+# 兼容 Debian 两种 apt 源格式：bullseye 的 /etc/apt/sources.list 与 bookworm 的 .sources
 ENV TZ=Asia/Shanghai
-RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list \
+RUN find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec \
+      sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g; s|security.debian.org|mirrors.tuna.tsinghua.edu.cn|g' {} + \
  && apt-get update && apt-get install -y --no-install-recommends tzdata \
  && rm -rf /var/lib/apt/lists/*
 
