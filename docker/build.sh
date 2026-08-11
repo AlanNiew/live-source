@@ -11,6 +11,9 @@ MODE="${1:-all}"
 CONTAINER_NAME="hntv-api"
 IMAGE_NAME="hntv-api"
 
+# 脚本所在目录（兼容从任意目录执行：仓库根 ./docker/build.sh 或 cd docker 后 ./build.sh）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # 检查Docker是否安装
 if ! [ -x "$(command -v docker)" ]; then
   echo "错误: Docker未安装或未在PATH中找到。请先安装Docker。" >&2
@@ -35,7 +38,7 @@ cleanup_container() {
 # 构建Docker镜像
 build_image() {
   echo "正在构建Docker镜像..."
-  docker build -f ./Dockerfile.prod -t ${IMAGE_NAME} ..
+  docker build -f "${SCRIPT_DIR}/Dockerfile.prod" -t ${IMAGE_NAME} "${SCRIPT_DIR}/.."
   if [ $? -ne 0 ]; then
     echo "错误: Docker镜像构建失败！" >&2
     exit 1
