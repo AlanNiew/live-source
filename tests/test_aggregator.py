@@ -88,6 +88,56 @@ class AggregatorFilterTest(unittest.TestCase):
         self.assertNotIn('http://old/gone.m3u8', rec)
 
 
+class AggregateLockTest(unittest.TestCase):
+    """聚合互斥锁与首请求降级测试"""
+
+    def tearDown(self):
+        # 确保锁不残留，避免影响其他测试
+        try:
+            AggregatorUtils._aggregate_lock.release()
+        except RuntimeError:
+            pass
+
+    def test_get_aggregated_locked_returns_none(self):
+        """锁被占用时 get_aggregated_m3u 立即返回 None，不重复执行"""
+        AggregatorUtils._aggregate_lock.acquire()
+        try:
+            with mock.patch.object(AggregatorUtils, '_get_aggregated_m3u_locked') as m:
+                self.assertIsNone(AggregatorUtils.get_aggregated_m3u())
+                m.assert_not_called()
+        finally:
+            AggregatorUtils._aggregate_lock.release()
+
+    def test_get_aggregated_releases_lock_on_exception(self):
+        """内部实现抛异常时锁必须释放，且返回 None"""
+        with mock.patch.object(AggregatorUtils, '_get_aggregated_m3u_locked',
+                               side_effect=RuntimeError('boom')):
+            self.assertIsNone(AggregatorUtils.get_aggregated_m3u())
+        # 锁应已释放，可再次获取
+        self.assertTrue(AggregatorUtils._aggregate_lock.acquire(blocking=False))
+        AggregatorUtils._aggregate_lock.release()
+
+    def test_load_degrades_when_aggregating(self):
+        """无缓存且后台聚合进行中（锁被占）：load 降级返回官方源列表，不阻塞"""
+        AggregatorUtils._aggregate_lock.acquire()
+        try:
+            with mock.patch('core.aggregator.os.path.exists', return_value=False), \
+                 mock.patch.object(AggregatorUtils, 'get_hntv_only_m3u',
+                                   return_value="#EXTM3U\n# 降级测试\n"):
+                content = AggregatorUtils.load_aggregated_m3u()
+            self.assertEqual(content, "#EXTM3U\n# 降级测试\n")
+        finally:
+            AggregatorUtils._aggregate_lock.release()
+
+    def test_load_full_aggregate_when_idle(self):
+        """无缓存且无聚合在跑：现场完整聚合"""
+        with mock.patch('core.aggregator.os.path.exists', return_value=False), \
+             mock.patch.object(AggregatorUtils, 'get_aggregated_m3u',
+                               return_value="#EXTM3U\n# 完整聚合\n"):
+            content = AggregatorUtils.load_aggregated_m3u()
+        self.assertEqual(content, "#EXTM3U\n# 完整聚合\n")
+
+
 class SourceUtilsTest(unittest.TestCase):
     """公开源解析/评分/过滤逻辑测试"""
 

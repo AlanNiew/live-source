@@ -1,6 +1,7 @@
 """聚合编排：多源合并去重择优、探测过滤、缓存落盘、跨轮失败记录"""
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from config import (AGGREGATED_M3U_PATH, FILTER_UNREACHABLE, GROUP_ORDER,
@@ -14,6 +15,11 @@ from core.sources import SourceUtils
 
 class AggregatorUtils:
     """多源直播源聚合工具类"""
+
+    # 聚合互斥锁：同一时刻只允许一个完整聚合在跑。
+    # 启动时后台聚合进行中，首请求触发 get_aggregated_m3u 会拿不到锁，
+    # 由 load_aggregated_m3u 降级返回官方源列表（秒级响应），避免重复全量聚合与长阻塞
+    _aggregate_lock = threading.Lock()
 
     @staticmethod
     def _extract_hntv_item(item):
@@ -245,9 +251,25 @@ class AggregatorUtils:
     @staticmethod
     def get_aggregated_m3u():
         """
-        完整聚合刷新（公开源低频，6h 一轮）：拉取所有源并合并，落盘缓存
-        :return: 聚合后的 m3u 文本；失败时返回 None
+        完整聚合刷新（公开源低频，6h 一轮）：拉取所有源并合并，落盘缓存。
+        互斥锁防重入：已有聚合在跑（如启动时后台首刷）时立即返回 None，
+        由调用方决定降级，避免重复全量聚合
+        :return: 聚合后的 m3u 文本；失败或被占用返回 None
         """
+        if not AggregatorUtils._aggregate_lock.acquire(blocking=False):
+            print("聚合已在运行中，跳过本次聚合")
+            return None
+        try:
+            return AggregatorUtils._get_aggregated_m3u_locked()
+        except Exception as e:
+            print(f"生成聚合 m3u 出错: {str(e)}")
+            return None
+        finally:
+            AggregatorUtils._aggregate_lock.release()
+
+    @staticmethod
+    def _get_aggregated_m3u_locked():
+        """聚合内部实现（调用方必须已持有 _aggregate_lock）"""
         try:
             # 1. 拉取 hntv 官方频道
             hntv_channels = AggregatorUtils.fetch_hntv_channels()
@@ -297,7 +319,10 @@ class AggregatorUtils:
     @staticmethod
     def load_aggregated_m3u():
         """
-        读取落盘的聚合结果；文件不存在则触发一次生成
+        读取落盘的聚合结果；文件不存在则触发一次生成：
+        - 无缓存且后台聚合正在进行（锁被占）→ 降级返回官方源列表（秒级响应），
+          避免首请求在启动窗口期长时间阻塞
+        - 无缓存且无聚合在跑 → 现场完整聚合
         :return: 聚合 m3u 文本
         """
         try:
@@ -307,7 +332,11 @@ class AggregatorUtils:
             # 不存在则生成
             print("聚合缓存文件不存在，触发首次生成")
             content = AggregatorUtils.get_aggregated_m3u()
-            return content if content else "#EXTM3U\n# 聚合数据生成失败\n"
+            if content:
+                return content
+            # 聚合失败或被占用（后台聚合进行中）→ 降级为 hntv 官方源，保证有内容返回
+            print("聚合不可用（生成失败或进行中），降级返回 hntv 官方源")
+            return AggregatorUtils.get_hntv_only_m3u()
         except Exception as e:
             print(f"读取聚合缓存出错: {str(e)}")
             return "#EXTM3U\n# 读取聚合缓存出错\n"
