@@ -32,14 +32,14 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 - `app.py` 路由：`/api/proxy`、`/api/generate-sign`（需 Bearer token）、`/api/live.m3u8`、`/api/live.xml`、`/api/live.xml.gz`、`/health`
 - **调度线程在导入时启动**：`main.py` 模块顶层调 `start_all()`，gunicorn 导入 `main:app` 即触发。因此 **`GUNICORN_WORKERS` 必须为 1**（`gunicorn.conf.py` 默认已是 1），否则 XML 更新/聚合刷新/健康检测重复执行、告警邮件重复轰炸
 - **`gunicorn.conf.py` 不要开 `preload_app`**：preload 会在 master fork worker 时复制 daemon 线程，导致 worker 锁死（120s 超时被 SIGKILL，健康检测全超时）——踩过的坑，见 commit fd5d9ca
-- 三个后台 daemon 线程（`scheduling.py:start_all`）：XML 每日更新（每天 GMT+8 02:30 刷 EPG）、聚合刷新（**双频率**：公开源每 6h + 官方源每 1h）、健康监控（常规 10 分钟一轮 + 流探测 30 分钟一轮，状态翻转才发邮件）
+- 三个后台 daemon 线程（`scheduling.py:start_all`）：XML 每日更新（每天 GMT+8 02:30 刷 EPG）、聚合刷新（**双频率**：公开源每 6h + 官方源每 3h）、健康监控（常规 10 分钟一轮 + 流探测 30 分钟一轮，状态翻转才发邮件）
 
 ## 磁盘缓存（改逻辑后必须清缓存验证）
 
 `xml_data/` 目录，全部 `os.makedirs(... exist_ok=True)` 自动创建：
 
 - `live.xml` / `live.xml.gz`：EPG 数据，**每天仅 02:30 刷新一次**。`/api/live.xml` 直接读缓存文件（优先 gz）；`/api/live.xml.gz` 文件不存在才现场生成
-- `aggregated.m3u`：多源聚合结果（hntv 官方 + 3 个公开源）；`/api/live.m3u8` 读它，无缓存才触发首次生成。**官方源每 1h 刷新（签名有时效），公开源每 6h 刷新（含探测过滤）**
+- `aggregated.m3u`：多源聚合结果（hntv 官方 + 3 个公开源）；`/api/live.m3u8` 读它，无缓存才触发首次生成。**官方源每 3h 刷新（签名有效期约 4h），公开源每 6h 刷新（含探测过滤）**
 - `public_channels.json`：公开源过滤+探测后的频道缓存（官方 1h 刷新时复用，避免频繁拉公开源）
 - `stream_failures.json`：聚合探测的跨轮失败记录（连续两轮失败才丢弃频道）
 - **改了聚合/过滤逻辑后，手动删除 `xml_data/aggregated.m3u`（和 `stream_failures.json`）再重启**，否则旧结果一直生效
