@@ -1,4 +1,5 @@
 import smtplib
+import time
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -101,35 +102,52 @@ class EmailNotifier:
                 bcc_addrs = [bcc_addrs]
             to_addrs.extend(bcc_addrs)
 
-        try:
-            # 连接服务器
-            if self.config['ssl']:
-                server = smtplib.SMTP_SSL(self.config['smtp_server'], self.config['port'])
-            else:
-                server = smtplib.SMTP(self.config['smtp_server'], self.config['port'])
-                server.starttls()
+        # 网络/服务端偶发断连（如 "Connection unexpectedly closed"），重试一次；
+        # 认证失败不重试（凭证问题重试无意义）
+        server = None
+        for attempt in range(2):
+            try:
+                # 连接服务器
+                if self.config['ssl']:
+                    server = smtplib.SMTP_SSL(self.config['smtp_server'], self.config['port'])
+                else:
+                    server = smtplib.SMTP(self.config['smtp_server'], self.config['port'])
+                    server.starttls()
 
-            # 登录
-            server.login(self.username, self.password)
+                # 登录
+                server.login(self.username, self.password)
 
-            # 发送邮件
-            server.sendmail(self.from_addr, to_addrs, msg.as_string())
+                # 发送邮件
+                server.sendmail(self.from_addr, to_addrs, msg.as_string())
 
-            print(f"邮件发送成功！收件人：{to_addrs}")
-            return True
+                print(f"邮件发送成功！收件人：{to_addrs}")
+                return True
 
-        except smtplib.SMTPAuthenticationError:
-            print("认证失败，请检查用户名和密码/授权码")
-            return False
-        except smtplib.SMTPException as e:
-            print(f"SMTP错误：{e}")
-            return False
-        except Exception as e:
-            print(f"邮件发送失败：{e}")
-            return False
-        finally:
-            if 'server' in locals():
-                server.quit()
+            except smtplib.SMTPAuthenticationError:
+                print("认证失败，请检查用户名和密码/授权码")
+                return False
+            except smtplib.SMTPException as e:
+                print(f"SMTP错误：{e}")
+                if attempt == 0:
+                    time.sleep(2)  # 短暂等待后重试
+                    continue
+                return False
+            except Exception as e:
+                print(f"邮件发送失败：{e}")
+                if attempt == 0:
+                    time.sleep(2)
+                    continue
+                return False
+            finally:
+                # 连接可能已失效（断连/认证失败），quit 需防二次异常，避免掩盖真实错误
+                if server is not None:
+                    try:
+                        server.quit()
+                    except Exception:
+                        pass
+                server = None
+
+        return False
 
     def send_notification(self, title: str, message: str, level: str = "info") -> bool:
         """发送通知邮件（带格式）"""
