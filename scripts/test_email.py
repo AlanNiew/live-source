@@ -9,6 +9,7 @@
 import importlib.util
 import os
 import sys
+import time
 
 # 项目根目录（脚本位于 scripts/ 下）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -66,7 +67,7 @@ def main():
         "<div style='font-family:sans-serif;padding:20px;'>"
         "<h2 style='color:#27ae60;'>✅ HNTV 邮件链路测试</h2>"
         "<p>如果收到本邮件，说明 SMTP 发送、中文主题编码、HTML 渲染均正常。</p>"
-        f"<p>发送时间：{__import__('time').strftime('%Y-%m-%d %H:%M:%S')}</p>"
+        f"<p>发送时间：{time.strftime('%Y-%m-%d %H:%M:%S')}</p>"
         "</div>"
     )
 

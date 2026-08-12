@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from config import (AGGREGATED_M3U_PATH, FILTER_UNREACHABLE, GROUP_ORDER,
                     HNTV_GROUP_NAME, PUBLIC_CHANNELS_CACHE_PATH,
                     STREAM_CHECK_CONCURRENCY, STREAM_FAILURES_PATH,
-                    STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE, XML_DATA_DIR)
+                    STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE)
+from core.atomic_io import atomic_write_text
 from core.hntv_client import ApiUtils
 from core.probing import probe_stream
 from core.sources import SourceUtils
@@ -149,11 +150,9 @@ class AggregatorUtils:
 
     @staticmethod
     def _save_failures(failures):
-        """保存失败记录"""
+        """保存失败记录（原子写入）"""
         try:
-            os.makedirs(XML_DATA_DIR, exist_ok=True)
-            with open(STREAM_FAILURES_PATH, 'w', encoding='utf-8') as f:
-                json.dump(failures, f, ensure_ascii=False, indent=2)
+            atomic_write_text(STREAM_FAILURES_PATH, json.dumps(failures, ensure_ascii=False, indent=2))
         except Exception as e:
             print(f"保存失败记录出错: {str(e)}")
 
@@ -225,11 +224,10 @@ class AggregatorUtils:
 
     @staticmethod
     def _save_public_channels(channels):
-        """保存公开源频道缓存（官方源高频刷新时复用）"""
+        """保存公开源频道缓存（官方源高频刷新时复用，原子写入）"""
         try:
-            os.makedirs(XML_DATA_DIR, exist_ok=True)
-            with open(PUBLIC_CHANNELS_CACHE_PATH, 'w', encoding='utf-8') as f:
-                json.dump(channels, f, ensure_ascii=False, indent=2)
+            atomic_write_text(PUBLIC_CHANNELS_CACHE_PATH,
+                              json.dumps(channels, ensure_ascii=False, indent=2))
         except Exception as e:
             print(f"保存公开源缓存出错: {str(e)}")
 
@@ -278,11 +276,9 @@ class AggregatorUtils:
             public_channels = AggregatorUtils.prepare_public_channels()
             AggregatorUtils._save_public_channels(public_channels)
 
-            # 3. 合并生成 m3u 并落盘
+            # 3. 合并生成 m3u 并落盘（原子写入）
             m3u_content = AggregatorUtils.aggregate_m3u(hntv_channels, public_channels)
-            os.makedirs(XML_DATA_DIR, exist_ok=True)
-            with open(AGGREGATED_M3U_PATH, 'w', encoding='utf-8') as f:
-                f.write(m3u_content)
+            atomic_write_text(AGGREGATED_M3U_PATH, m3u_content)
             print(f"聚合结果已保存到 {AGGREGATED_M3U_PATH}")
 
             return m3u_content
@@ -307,10 +303,9 @@ class AggregatorUtils:
                 return AggregatorUtils.get_aggregated_m3u()
 
             m3u_content = AggregatorUtils.aggregate_m3u(hntv_channels, public_channels)
-            os.makedirs(XML_DATA_DIR, exist_ok=True)
-            with open(AGGREGATED_M3U_PATH, 'w', encoding='utf-8') as f:
-                f.write(m3u_content)
-            print(f"官方源刷新完成，已更新 {AGGREGATED_M3U_PATH}（hntv {len(hntv_channels)} 个 + 公开 {len(public_channels)} 个）")
+            atomic_write_text(AGGREGATED_M3U_PATH, m3u_content)
+            print(f"官方源刷新完成，已更新 {AGGREGATED_M3U_PATH}"
+                  f"（hntv {len(hntv_channels)} 个 + 公开 {len(public_channels)} 个）")
             return m3u_content
         except Exception as e:
             print(f"官方源刷新出错: {str(e)}")

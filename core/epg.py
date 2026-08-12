@@ -3,7 +3,8 @@ import datetime
 import gzip
 import os
 
-from config import GMT8, GZ_FILE_PATH, XML_DATA_DIR, XML_FILE_PATH
+from config import GMT8, GZ_FILE_PATH, XML_FILE_PATH
+from core.atomic_io import atomic_write_gzip, atomic_write_text
 from core.hntv_client import ApiUtils
 
 
@@ -29,67 +30,84 @@ class TimeUtils:
 class XmlUtils:
     """EPG XML 处理工具类"""
 
+    # 空 tv 默认 XML（接口失败/异常时的兜底返回，同时落盘）
+    EMPTY_XML = ('<?xml version="1.0" encoding="UTF-8"?>'
+                 '<tv generator-info-name="hntv-live" '
+                 'generator-info-url="https://github.com/AlanNiew"></tv>')
+
+    # XML 头（channel/programme 均追加在此之后，结束于 </tv>）
+    XML_HEADER = ('<?xml version="1.0" encoding="UTF-8"?>'
+                  '<tv generator-info-name="hntv-live" '
+                  'generator-info-url="https://github.com/AlanNiew">\n')
+
+    @staticmethod
+    def _build_channel_block(item):
+        """
+        构建单个频道的 XML 块（channel 定义 + 当日 programme 列表）
+        :param item: 官方接口返回的单个频道 dict
+        :return: XML 块字符串（无 cid 时返回空串）
+        """
+        name = item.get('name', 'Unknown')
+        cid = item.get('cid')
+        if cid is None:
+            return ""
+
+        block = f'<channel id="{cid}">\n' \
+                f'<display-name lang="zh">{name}</display-name>\n' \
+                f'</channel>\n'
+
+        # 拉取当日 EPG 节目数据（当天零点时间戳）
+        today = datetime.datetime.now(tz=GMT8).date()
+        zero_time = datetime.datetime.combine(today, datetime.time.min, tzinfo=GMT8)
+        epg_response = ApiUtils.get_hntv_epg_data(cid, int(zero_time.timestamp()))
+        if epg_response.status_code != 200:
+            return block
+        epg_data = epg_response.json()
+        if not isinstance(epg_data, dict) or not isinstance(epg_data.get('programs'), list):
+            return block
+
+        for program in epg_data['programs']:
+            title = program.get('title', 'Unknown')
+            begin_time = TimeUtils.format_timestamp_for_epg(program.get('beginTime', ''))
+            end_time = TimeUtils.format_timestamp_for_epg(program.get('endTime', ''))
+            block += f'<programme start="{begin_time}" stop="{end_time}" channel="{cid}">\n' \
+                     f'<title lang="zh">{title}</title>\n' \
+                     f'</programme>\n'
+        return block
+
+    @staticmethod
+    def _fetch_xml_content():
+        """
+        拉取频道列表并构建完整 XML 内容
+        :return: XML 文本（接口非 200 时返回空 tv 默认）
+        """
+        response = ApiUtils.get_hntv_live_list()
+        if response.status_code != 200:
+            return XmlUtils.EMPTY_XML
+
+        data = response.json()
+        xml_content = XmlUtils.XML_HEADER
+        if isinstance(data, list):
+            for item in data:
+                xml_content += XmlUtils._build_channel_block(item)
+        xml_content += '</tv>'
+        return xml_content
+
     @staticmethod
     def get_and_save_xml_data():
         """
-        获取XML数据并保存到文件，同时生成压缩文件
+        获取XML数据并保存到文件（原子写入），同时生成压缩文件
         :return: XML 文本内容
         """
         try:
-            response = ApiUtils.get_hntv_live_list()
-            if response.status_code != 200:
-                xml_content = '<?xml version="1.0" encoding="UTF-8"?><tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew"></tv>'
-            else:
-                data = response.json()
-
-                # 构建EPG XML内容
-                xml_content = '<?xml version="1.0" encoding="UTF-8"?><tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew">\n'
-
-                # 如果数据结构不同，直接遍历响应数据
-                if isinstance(data, list):
-                    for item in data:
-                        name = item.get('name', 'Unknown')
-                        cid = item.get('cid')
-                        if cid is not None:
-                            # 添加频道信息
-                            xml_content += f'<channel id="{cid}">\n<display-name lang="zh">{name}</display-name>\n</channel>\n'
-
-                            # 获取EPG节目数据
-                            today = datetime.datetime.now(tz=GMT8).date()
-                            zero_time = datetime.datetime.combine(today, datetime.time.min, tzinfo=GMT8)
-                            date_timestamp = int(zero_time.timestamp())
-
-                            epg_response = ApiUtils.get_hntv_epg_data(cid, date_timestamp)
-                            if epg_response.status_code == 200:
-                                epg_data = epg_response.json()
-                                if 'programs' in epg_data and isinstance(epg_data['programs'], list):
-                                    for program in epg_data['programs']:
-                                        title = program.get('title', 'Unknown')
-                                        begin_time = program.get('beginTime', '')
-                                        end_time = program.get('endTime', '')
-
-                                        # 将时间戳转换为EPG格式 (YYYYMMDDHHMMSS +0800)
-                                        begin_time_formatted = TimeUtils.format_timestamp_for_epg(begin_time)
-                                        end_time_formatted = TimeUtils.format_timestamp_for_epg(end_time)
-
-                                        xml_content += f'<programme start="{begin_time_formatted}" stop="{end_time_formatted}" channel="{cid}">\n<title lang="zh">{title}</title>\n</programme>\n'
-
-                xml_content += '</tv>'
-
-            # 保存原始XML文件
-            with open(XML_FILE_PATH, 'w', encoding='utf-8') as f:
-                f.write(xml_content)
-
-            # 生成并保存压缩文件
-            with gzip.open(GZ_FILE_PATH, 'wt', encoding='utf-8') as f:
-                f.write(xml_content)
-
+            xml_content = XmlUtils._fetch_xml_content()
+            atomic_write_text(XML_FILE_PATH, xml_content)
+            atomic_write_gzip(GZ_FILE_PATH, xml_content)
             print(f"XML数据已保存到 {XML_FILE_PATH} 和 {GZ_FILE_PATH}")
             return xml_content
         except Exception as e:
             print(f"获取并保存XML数据时出错: {str(e)}")
-            # 返回默认XML内容
-            return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew"></tv>'
+            return XmlUtils.EMPTY_XML
 
     @staticmethod
     def load_xml_from_file():
@@ -109,7 +127,7 @@ class XmlUtils:
                 return XmlUtils.get_and_save_xml_data()
         except Exception as e:
             print(f"从文件加载XML数据时出错: {str(e)}")
-            return '<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="hntv-live" generator-info-url="https://github.com/AlanNiew"></tv>'
+            return XmlUtils.EMPTY_XML
 
     @staticmethod
     def trans_list_to_xml():
