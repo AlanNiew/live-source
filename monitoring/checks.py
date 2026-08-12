@@ -77,11 +77,11 @@ class CheckUtils:
     @staticmethod
     def fetch_m3u_groups():
         """
-        拉取聚合 m3u 文本并解析出 (url, group) 列表
+        拉取聚合 m3u 文本并解析出 (url, group, name) 列表
         只统计 http(s) 流：rtmp 等非 HTTP 协议 requests 无法探测，跳过不计入分母
-        行级状态机语义（与旧版逐行等价）：EXTINF 行更新当前 group（缺 group-title
-        则沿用上一组）；任何裸 http(s) 行都收集并归属当前 group
-        :return: (url, group) 列表；拉取失败返回空列表
+        行级状态机语义（与旧版逐行等价）：EXTINF 行更新当前 group/name（缺 group-title
+        则沿用上一组）；任何裸 http(s) 行都收集并归属当前 group/name
+        :return: (url, group, name) 列表；拉取失败返回空列表
         """
         try:
             r = requests.get(M3U_URL, timeout=10)
@@ -89,14 +89,17 @@ class CheckUtils:
                 return []
             items = []
             cur_group = DEFAULT_GROUP_NAME
+            cur_name = "未知频道"
             for line in r.text.splitlines():
                 line = line.strip()
                 if line.startswith('#EXTINF'):
                     group = SourceUtils.extract_group_title(line)
                     if group is not None:
                         cur_group = group
+                    # 频道名取 EXTINF 行末尾逗号后的部分
+                    cur_name = line.split(',')[-1].strip() if ',' in line else "未知频道"
                 elif line.startswith(('http://', 'https://')):
-                    items.append((line, cur_group))
+                    items.append((line, cur_group, cur_name))
             return items
         except Exception as e:
             print(f"流地址解析请求失败: {str(e)}")
@@ -184,6 +187,7 @@ class CheckUtils:
         独立于 run_check_once 的常规状态机，低频运行（30 分钟一轮）
         """
         items = CheckUtils.fetch_m3u_groups()
+        bad_names = defaultdict(list)  # group -> 不可达频道名列表（供日志与邮件明细）
         if not items:
             current = "FAIL"
             print("流探测异常：聚合列表拉取失败或无流地址")
@@ -195,13 +199,15 @@ class CheckUtils:
         else:
             # 并发探测所有流（严格判定：仅 200/206 可达，与聚合过滤的宽松口径区分）
             with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
-                results = list(executor.map(probe_stream, [u for u, _ in items]))
+                results = list(executor.map(probe_stream, [u for u, _, _ in items]))
             # 按分组统计
             groups = defaultdict(lambda: [0, 0])  # group -> [可达数, 总数]
-            for (url, group), ok in zip(items, results):
+            for (url, group, name), ok in zip(items, results):
                 groups[group][1] += 1
                 if ok:
                     groups[group][0] += 1
+                else:
+                    bad_names[group].append(name)
             # 逐组判定：低于分组阈值即不达标（卫视组只展示不参与告警）
             checks = []
             all_ok = True
@@ -219,6 +225,10 @@ class CheckUtils:
             current = "OK" if all_ok else "FAIL"
             for c in checks:
                 print(f"流探测 [{c['name']}]: {'达标' if c['status'] else '不达标'} - {c['detail']}")
+            # 日志明细：各组不可达频道列表，便于排查
+            for group, names in bad_names.items():
+                if names:
+                    print(f"  不可达频道 [{group}]: {'、'.join(names)}")
 
         if current == "FAIL":
             CheckUtils._stream_fail_count += 1
@@ -228,11 +238,15 @@ class CheckUtils:
 
         # 状态翻转时才发邮件
         if current == "FAIL" and CheckUtils._stream_last_status == "OK":
+            extra_info = {"连续失败次数": f"第 {CheckUtils._stream_fail_count} 次"}
+            bad_lines = [f"{g}: {'、'.join(ns)}" for g, ns in bad_names.items() if ns]
+            if bad_lines:
+                extra_info["不可达频道"] = "；".join(bad_lines)
             AlertUtils.send_alert(
                 subject="直播流可达性异常",
                 checks=checks,
                 level='error',
-                extra_info={"连续失败次数": f"第 {CheckUtils._stream_fail_count} 次"},
+                extra_info=extra_info,
             )
         elif current == "OK" and CheckUtils._stream_last_status == "FAIL":
             AlertUtils.send_alert(

@@ -30,9 +30,9 @@ class StreamCheckStateMachineTest(unittest.TestCase):
     def test_weishi_fail_no_alert(self):
         """只有卫视不达标：不发邮件，状态保持 OK（卫视仅日志展示）"""
         self.items = [
-            ("http://ok/1.m3u8", "河南卫视"),
-            ("http://ok/2.m3u8", "央视"),
-            ("http://bad/3.m3u8", "卫视"),
+            ("http://ok/1.m3u8", "河南卫视", "河南卫视"),
+            ("http://ok/2.m3u8", "央视", "CCTV-1 综合"),
+            ("http://bad/3.m3u8", "卫视", "北京卫视"),
         ]
         self.probe_results = {"http://bad/3.m3u8": False}
         CheckUtils._stream_last_status = "OK"
@@ -41,11 +41,11 @@ class StreamCheckStateMachineTest(unittest.TestCase):
         self.assertEqual(CheckUtils._stream_last_status, "OK")
 
     def test_cctv_fail_sends_alert(self):
-        """央视不达标：发故障邮件，明细含三组"""
+        """央视不达标：发故障邮件，明细含三组与不可达频道列表"""
         self.items = [
-            ("http://ok/1.m3u8", "河南卫视"),
-            ("http://bad/2.m3u8", "央视"),
-            ("http://bad/3.m3u8", "卫视"),
+            ("http://ok/1.m3u8", "河南卫视", "河南卫视"),
+            ("http://bad/2.m3u8", "央视", "CCTV-1 综合"),
+            ("http://bad/3.m3u8", "卫视", "北京卫视"),
         ]
         self.probe_results = {"http://bad/2.m3u8": False, "http://bad/3.m3u8": False}
         CheckUtils._stream_last_status = "OK"
@@ -54,10 +54,15 @@ class StreamCheckStateMachineTest(unittest.TestCase):
         self.assertEqual(self.mails[0]['level'], 'error')
         names = [c['name'] for c in self.mails[0]['checks']]
         self.assertEqual([n.split('（')[0] for n in names], ['河南卫视', '央视', '卫视'])
+        # 不可达频道明细应出现在邮件额外信息里
+        extra = self.mails[0]['extra_info']
+        self.assertIn('不可达频道', extra)
+        self.assertIn('CCTV-1 综合', extra['不可达频道'])
+        self.assertIn('北京卫视', extra['不可达频道'])
 
     def test_recover_sends_info(self):
         """FAIL -> OK：发恢复通知"""
-        self.items = [("http://ok/1.m3u8", "河南卫视")]
+        self.items = [("http://ok/1.m3u8", "河南卫视", "河南卫视")]
         self.probe_results = {}
         CheckUtils._stream_last_status = "FAIL"
         CheckUtils.run_stream_check_once()

@@ -97,7 +97,9 @@ class LegacyFetchM3uGroupsEquivalenceTest(unittest.TestCase):
             resp.status_code = 200
             resp.text = text
             m.return_value = resp
-            return CheckUtils.fetch_m3u_groups()
+            # 新版为 (url, group, name) 三元组，name 为新增排查信息；
+            # 等价性比较沿用旧版二元组口径
+            return [(u, g) for u, g, _ in CheckUtils.fetch_m3u_groups()]
 
     def test_normal(self):
         """规范 m3u：EXTINF+group+URL 成对"""
@@ -107,6 +109,22 @@ class LegacyFetchM3uGroupsEquivalenceTest(unittest.TestCase):
             '#EXTINF:-1 group-title="央视",CCTV-1 综合\nhttp://b/2.m3u8\n'
         )
         self.assertEqual(self._run_new(text), _legacy_fetch_m3u_groups(text))
+
+    def test_name_extracted(self):
+        """新增的频道名字段：从 EXTINF 行逗号后正确提取"""
+        with mock.patch('monitoring.checks.requests.get') as m:
+            resp = mock.Mock()
+            resp.status_code = 200
+            resp.text = (
+                '#EXTINF:-1 group-title="卫视",北京卫视\nhttp://a/1.m3u8\n'
+                "#EXTINF:-1,某频道\nhttp://b/2.m3u8\n"
+            )
+            m.return_value = resp
+            items = CheckUtils.fetch_m3u_groups()
+        self.assertEqual(items, [
+            ('http://a/1.m3u8', '卫视', '北京卫视'),
+            ('http://b/2.m3u8', '卫视', '某频道'),
+        ])
 
     def test_bare_url_line(self):
         """裸 http(s) URL 行（无 EXTINF）：旧版收集并归属当前组，新版必须一致"""
