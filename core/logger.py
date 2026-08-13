@@ -13,12 +13,13 @@
 - SQLite logs 表：仅 WARNING+（防膨胀，7 天清理由 admin.db.save_log 处理）
 - 线程名前缀：[线程名]，保留聚合日志的可读性
 """
+import datetime
 import logging
 import os
 import sys
 from logging.handlers import RotatingFileHandler
 
-from config import LOG_FILE_PATH
+from config import GMT8, LOG_FILE_PATH
 
 # 已初始化的 logger 缓存（同模块名复用同一实例）
 _loggers = {}
@@ -30,8 +31,11 @@ class SqliteHandler(logging.Handler):
     def emit(self, record):
         try:
             from admin import db
+            # 注意：record.asctime 仅在 Formatter 调用后才存在，这里须用 record.created 自行格式化
+            ts = datetime.datetime.fromtimestamp(
+                record.created, tz=GMT8).strftime('%Y-%m-%d %H:%M:%S')
             db.save_log(
-                record.asctime if hasattr(record, 'asctime') else '',
+                ts,
                 record.levelname,
                 record.name,
                 record.getMessage(),

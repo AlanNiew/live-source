@@ -4,12 +4,12 @@
 - 每操作短连接（check_same_thread=False + 独立连接），模块级写锁串行化并发写
 - 所有写操作 try/except 兜底：数据层失败不影响核心业务（聚合/监控照常跑）
 """
+import datetime
 import os
 import sqlite3
 import threading
-import time
 
-from config import (ADMIN_DB_PATH, LOG_KEEP_DAYS, MONITOR_HISTORY_KEEP,
+from config import (ADMIN_DB_PATH, GMT8, LOG_KEEP_DAYS, MONITOR_HISTORY_KEEP,
                     STREAM_HISTORY_KEEP)
 
 # 模块级写锁：SQLite 并发写串行化（监控线程 + API 线程）
@@ -66,8 +66,6 @@ CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts);
 
 def _now():
     """当前 GMT+8 时间字符串（与项目其他时间一致）"""
-    import datetime
-    from config import GMT8
     return datetime.datetime.now(tz=GMT8).strftime('%Y-%m-%d %H:%M:%S')
 
 

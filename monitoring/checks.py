@@ -1,14 +1,15 @@
 """健康检测项：服务存活/直播列表/EPG/流探测，含常规与流探测两套状态机"""
+import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from config import (ALERT_GROUPS, DEFAULT_GROUP_NAME, DEFAULT_GROUP_RATIO,
-                    EPG_URL, GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
+                    EPG_URL, GMT8, GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
                     MIN_CHANNEL_COUNT, STREAM_CHECK_CONCURRENCY)
+from core.logger import get_logger
 from core.probing import probe_stream
 from core.sources import SourceUtils
-from core.logger import get_logger
 from monitoring.alerts import AlertUtils
 
 
@@ -216,12 +217,11 @@ class CheckUtils:
             # 落库：本轮流探测明细（每频道一条，失败静默不影响检测）
             try:
                 from admin import db
-                import datetime as _dt
-                from config import GMT8
-                round_id = _dt.datetime.now(tz=GMT8).strftime('%Y%m%d%H%M')
+                now = datetime.datetime.now(tz=GMT8)
+                round_id = now.strftime('%Y%m%d%H%M')
                 for (url, group, name), ok in zip(items, results):
                     db.save_stream_history(
-                        _dt.datetime.now(tz=GMT8).strftime('%Y-%m-%d %H:%M:%S'),
+                        now.strftime('%Y-%m-%d %H:%M:%S'),
                         group, name, url, ok, round_id)
             except Exception:
                 pass

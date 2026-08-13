@@ -121,6 +121,27 @@ class AdminDbTest(unittest.TestCase):
         db.set_setting('mode', 'full')
         self.assertEqual(db.get_setting('mode'), 'full')
 
+    def test_logger_writes_to_db_with_ts(self):
+        """logger 的 SqliteHandler：WARNING+ 写入 logs 表且 ts 非空"""
+        from core.logger import get_logger
+        log = get_logger('test-module')
+        log.warning('测试警告 abc123')
+        rows = db.get_logs(keyword='abc123')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['level'], 'WARNING')
+        self.assertEqual(rows[0]['module'], 'test-module')
+        # 修复点：ts 必须非空（record.asctime 不可用的 bug 已修）
+        self.assertTrue(rows[0]['ts'], "日志 ts 不应为空")
+        self.assertIn('-', rows[0]['ts'])  # 格式 YYYY-MM-DD
+
+    def test_logger_skips_info_in_db(self):
+        """logger 的 SqliteHandler：INFO 不进 DB（防膨胀）"""
+        from core.logger import get_logger
+        log = get_logger('test-module')
+        log.info('普通信息不入库')
+        rows = db.get_logs(keyword='普通信息不入库')
+        self.assertEqual(rows, [])
+
 
 class MonitorPersistTest(unittest.TestCase):
     """监控落库挂接：run_check_once / run_stream_check_once 真实写库"""
