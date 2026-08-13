@@ -23,6 +23,13 @@ def _log(msg):
     print(f"{prefix}{msg}")
 
 
+# 异步刷新协调：POST 添加/删除房间后请求立即聚合刷新。
+# _refresh_pending 标志用于合并多次请求（只保留一个 worker），
+# worker 阻塞获取 _aggregate_lock 保证与定时任务不并发。
+_refresh_pending = False
+_refresh_flag_lock = threading.Lock()
+
+
 class AggregatorUtils:
     """多源直播源聚合工具类"""
 
@@ -72,21 +79,46 @@ class AggregatorUtils:
         return hntv_channels
 
     @staticmethod
+    def list_bilibili_rooms():
+        """
+        列出全部 B 站频道（静态配置 + 动态列表合并）：
+        - 以 room_id 为唯一 key 去重，静态配置优先
+        - 静态条目支持 room_id 直填或 uid（uid 走 get_room_id 解析，磁盘缓存兜底）
+        :return: [{name, room_id, source}]，source 为 static/custom
+        """
+        result = []
+        seen = set()
+
+        for item in BILIBILI_ROOMS:
+            room_id = item.get("room_id") or BilibiliUtils.get_room_id(item.get("uid"))
+            if room_id is not None and room_id not in seen:
+                seen.add(room_id)
+                result.append({"name": item["name"], "room_id": room_id, "source": "static"})
+
+        for item in BilibiliUtils.load_custom_rooms():
+            room_id = item.get("room_id")
+            if room_id is not None and room_id not in seen:
+                seen.add(room_id)
+                result.append({
+                    "name": item.get("name") or f"房间{room_id}",
+                    "room_id": room_id,
+                    "source": "custom",
+                })
+        return result
+
+    @staticmethod
     def fetch_bilibili_channels():
         """
         拉取 B 站直播频道（开播的才加入，未开播自动跳过）：
-        - 通过 uid 解析房间号（接口失败用磁盘缓存兜底）
+        - 数据源 = 静态配置 + 动态列表（room_id 去重，静态优先）
         - 实测主清单判定在播（playUrl 解析结果不可信，未开播也返回地址）
         - 地址为本服务代理 URL（播放器直连原始地址会 403 防盗链）
         :return: B 站直播频道 dict 列表（可能为空）
         """
         channels = []
-        for item in BILIBILI_ROOMS:
+        for item in AggregatorUtils.list_bilibili_rooms():
+            room_id = item["room_id"]
             name = item["name"]
-            room_id = BilibiliUtils.get_room_id(item["uid"])
-            if room_id is None:
-                _log(f"B站直播跳过（房间号解析失败）: {name}")
-                continue
             if not BilibiliUtils.is_live(room_id):
                 _log(f"B站直播跳过（未开播）: {name} (room={room_id})")
                 continue
@@ -314,6 +346,38 @@ class AggregatorUtils:
             AggregatorUtils._aggregate_lock.release()
 
     @staticmethod
+    def request_async_refresh():
+        """
+        请求异步聚合刷新（POST 添加/删除房间后调用）：
+        - 合并多次请求：已有 worker 待跑时直接返回，不重复开线程
+        - 与定时任务不并发：worker 阻塞获取 _aggregate_lock，定时聚合进行中则等其完成
+        """
+        global _refresh_pending
+        with _refresh_flag_lock:
+            if _refresh_pending:
+                return
+            _refresh_pending = True
+        worker = threading.Thread(target=AggregatorUtils._async_refresh_worker,
+                                  daemon=True, name='聚合-手动刷新')
+        worker.start()
+
+    @staticmethod
+    def _async_refresh_worker():
+        """异步刷新 worker：循环消费 _refresh_pending 标志，直到无待刷请求"""
+        global _refresh_pending
+        while True:
+            with _refresh_flag_lock:
+                if not _refresh_pending:
+                    return
+                _refresh_pending = False
+            try:
+                # 阻塞获取聚合锁：与定时聚合/官方源刷新互斥，保证同一时刻只有一个写文件
+                with AggregatorUtils._aggregate_lock:
+                    AggregatorUtils._get_aggregated_m3u_locked()
+            except Exception as e:
+                _log(f"手动刷新出错: {str(e)}")
+
+    @staticmethod
     def _get_aggregated_m3u_locked():
         """聚合内部实现（调用方必须已持有 _aggregate_lock）"""
         try:
@@ -348,11 +412,26 @@ class AggregatorUtils:
     @staticmethod
     def refresh_official_only():
         """
-        官方源高频刷新（1h 一轮）：只拉 hntv 官方频道，复用公开源缓存重新合并。
+        官方源高频刷新（3h 一轮）：只拉 hntv 官方频道，复用公开源缓存重新合并。
         官方接口签名有时效，需高频刷新保持新鲜；不拉公开源、不重复探测。
         公开源缓存未就绪时回退完整聚合。
+        加锁：与公开源聚合/手动刷新互斥，杜绝并发写 aggregated.m3u
         :return: 聚合后的 m3u 文本；失败时返回 None
         """
+        if not AggregatorUtils._aggregate_lock.acquire(blocking=False):
+            _log("聚合已在运行中，跳过官方源刷新")
+            return None
+        try:
+            return AggregatorUtils._refresh_official_only_locked()
+        except Exception as e:
+            _log(f"官方源刷新出错: {str(e)}")
+            return None
+        finally:
+            AggregatorUtils._aggregate_lock.release()
+
+    @staticmethod
+    def _refresh_official_only_locked():
+        """官方源刷新内部实现（调用方必须已持有 _aggregate_lock）"""
         try:
             # B 站测试模式：跳过 hntv 官方源与公开源，仅刷新 B 站直播频道
             if BILIBILI_ONLY_MODE:
@@ -365,7 +444,8 @@ class AggregatorUtils:
                 public_channels = AggregatorUtils._load_public_channels()
                 if public_channels is None:
                     _log("公开源缓存未就绪，回退完整聚合")
-                    return AggregatorUtils.get_aggregated_m3u()
+                    # 已持锁，直接调 locked 版避免重入
+                    return AggregatorUtils._get_aggregated_m3u_locked()
 
             bilibili_channels = AggregatorUtils.fetch_bilibili_channels()
             m3u_content = AggregatorUtils.aggregate_m3u(

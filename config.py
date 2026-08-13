@@ -101,12 +101,12 @@ SIGN_PARAM_PAT = re.compile(
     re.I)
 
 # ---------------------------------------------------------------- B站直播
-# B 站直播间列表（默认频道：央视新闻 / 河南卫视）。
-# 新增频道格式：{"name": "频道名", "uid": UP主UID}，聚合时通过 uid 解析房间号并判断开播，
-# 开播的频道才加入 m3u 列表（地址为本服务的代理 URL，播放器只认本服务）。
-# 如何获取 uid：B 站直播间网页地址 live.bilibili.com/<房间号> 是房间号，需查 UP 主 UID——
-# 打开直播间后从地址栏的 live.bilibili.com/<房间号> 用接口 room_init?id=<房间号> 查询 uid 字段；
-# 或直接在 UP 主空间 space.bilibili.com/<UID> 地址栏取数字（空间主页即 UID）。
+# B 站直播间列表（默认频道：央视新闻 / 河南卫视 / 中国应急管理）。
+# 新增频道格式（两种写法二选一）：
+#   {"name": "频道名", "room_id": 房间号}   # 推荐：房间号即直播间网址 live.bilibili.com/<房间号> 的数字
+#   {"name": "频道名", "uid": UP主UID}       # 兼容：通过 uid 解析房间号（需查 uid）
+# 聚合时判断开播，开播的频道才加入 m3u 列表（地址为本服务的代理 URL，播放器只认本服务）。
+# 更推荐用运行时 API 动态添加（POST /api/bilibili/rooms），无需改配置重启。
 BILIBILI_ROOMS = [
     {"name": "央视新闻", "uid": 222103174},
     {"name": "河南卫视", "uid": 2057655323},
@@ -117,8 +117,17 @@ BILIBILI_ROOMS = [
 BILIBILI_REFERER = "https://live.bilibili.com/"
 BILIBILI_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 
+# B 站登录 Cookie（解锁蓝光/原画；留空 = 游客仅 720P）。
+# 只需 SESSDATA（实测仅 SESSDATA 即可解锁原画，HttpOnly 需从 DevTools/Network 抓取）。
+# 配置在 .env：BILIBILI_COOKIE=SESSDATA=xxx; buvid3=yyy
+# 安全：与 API_TOKEN 同等敏感（账号凭据），勿提交、勿打印；cookie 失效自动降级游客画质
+BILIBILI_COOKIE = os.environ.get('BILIBILI_COOKIE', '').strip()
+
 # 房间信息/流地址解析的磁盘缓存路径（流地址签名约 4h 过期，缓存设短 TTL 兜底）
 BILIBILI_CACHE_PATH = os.path.join(XML_DATA_DIR, 'bilibili_rooms.json')
+# 运行时动态添加的频道列表（POST /api/bilibili/rooms 写入，重启不丢）。
+# 注意：与 BILIBILI_CACHE_PATH 语义不同——那是 uid→room_id 的解析缓存，不要混用
+BILIBILI_CUSTOM_ROOMS_PATH = os.path.join(XML_DATA_DIR, 'bilibili_custom_rooms.json')
 # 流地址解析结果的内存缓存 TTL（秒）：地址带时效签名，过期必须重新解析
 BILIBILI_PLAY_CACHE_TTL = 1800
 

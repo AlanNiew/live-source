@@ -62,22 +62,43 @@ password=邮箱授权码（QQ/163 在邮箱设置中获取）
 
 ### 2. B 站直播频道（可选，默认已含央视新闻/河南卫视/中国应急管理）
 
-在 `config.py` 的 `BILIBILI_ROOMS` 里新增一行即可：
+> 完整 API 操作文档见 **[BILIBILI_ROOMS_API.md](BILIBILI_ROOMS_API.md)**（请求/响应/错误码/脚本/常见问题）
+
+**推荐方式：运行时 API 动态添加**（无需改配置重启）：
+
+```bash
+# 查看当前频道
+curl "http://IP:5002/api/bilibili/rooms"
+
+# 添加（需 API_TOKEN，room_id 即 live.bilibili.com/<房间号> 的数字）
+curl -X POST "http://IP:5002/api/bilibili/rooms" \
+  -H "Authorization: Bearer <API_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"XX卫视","room_id":123456}'
+
+# 删除
+curl -X DELETE "http://IP:5002/api/bilibili/rooms/123456" \
+  -H "Authorization: Bearer <API_TOKEN>"
+```
+
+或校验脚本（自动验证房间存在/在播）：
+```bash
+python scripts/add_bili_room.py 123456
+python scripts/add_bili_room.py 123456 "XX卫视" --api http://IP:5002 --token <API_TOKEN>
+```
+
+**静态配置方式**（config.py，重启生效，支持 `room_id` 直填或 `uid` 二选一）：
 
 ```python
 BILIBILI_ROOMS = [
-    {"name": "央视新闻", "uid": 222103174},       # 默认频道
-    {"name": "河南卫视", "uid": 2057655323},       # 默认频道
-    {"name": "中国应急管理", "uid": 3707002299615617},  # 默认频道
-    {"name": "你想要的频道", "uid": 123456789},    # 手动新增：频道名 + UP 主 UID
+    {"name": "央视新闻", "uid": 222103174},               # 默认频道
+    {"name": "河南卫视", "uid": 2057655323},               # 默认频道
+    {"name": "中国应急管理", "uid": 3707002299615617},    # 默认频道
+    {"name": "你想要的频道", "room_id": 123456},          # 手动新增：房间号直填
 ]
 ```
 
-**UID 获取方法**（二选一）：
-- 打开目标直播间，用 `curl "https://api.live.bilibili.com/room/v1/Room/room_init?id=<房间号>"`，响应里 `uid` 字段即 UP 主 UID（房间号取直播间网址 `live.bilibili.com/<房间号>` 的数字）
-- 或直接打开 UP 主空间主页 `space.bilibili.com/<UID>`，地址栏的数字就是 UID
-
-新增后删除 `xml_data/aggregated.m3u` 再重启，等下一次聚合（或手动触发）生效。
+房间号取直播间网址 `live.bilibili.com/<房间号>` 的数字，**无需查 uid**。房间号唯一、静态优先，无效/未开播房间自动跳过。
 
 ### 3. 安装依赖（清华镜像加速）
 
@@ -122,6 +143,9 @@ gunicorn -c gunicorn.conf.py main:app
 | `GET /api/bilibili/<room_id>/live.m3u8` | 无 | B 站直播代理 m3u8（分片重写为本服务地址） |
 | `GET /api/bilibili/<room_id>/seg/<path>` | 无 | B 站直播分片反代（注入 Referer/UA 转拉） |
 | `GET /api/bilibili/<room_id>/status` | 无 | B 站直播开播状态（实测主清单判定） |
+| `GET /api/bilibili/rooms` | 无 | 列出全部 B 站频道（默认附带实时开播状态） |
+| `POST /api/bilibili/rooms` | Bearer token | 动态添加 B 站频道 |
+| `DELETE /api/bilibili/rooms/<room_id>` | Bearer token | 删除动态添加的 B 站频道 |
 
 ## 测试
 

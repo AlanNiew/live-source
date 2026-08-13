@@ -2,6 +2,7 @@
 
 > 本文档说明本服务如何把哔哩哔哩直播间接入 m3u 直播列表并稳定播放。
 > 代码入口：`core/bilibili.py`（核心逻辑）、`app.py`（路由）、`core/aggregator.py`（聚合接入）、`config.py`（配置）。
+> 频道管理 API 的操作细节（请求/响应/错误码/校验脚本/常见问题）见 **[BILIBILI_ROOMS_API.md](BILIBILI_ROOMS_API.md)**。
 
 ## 一、为什么不能直接给播放器 B 站地址
 
@@ -162,39 +163,98 @@ proxy_segment(room_id, seg_path):
 | `GET /api/bilibili/<room_id>/live.m3u8` | 代理 m3u8 主清单（分片重写为本服务地址） |
 | `GET /api/bilibili/<room_id>/seg/<path>` | 分片反代（注入 Referer/UA 转拉） |
 | `GET /api/bilibili/<room_id>/status` | 开播状态 JSON（`{"room_id", "live", "playable"}`） |
+| `GET /api/bilibili/rooms` | 列出全部频道（静态+动态，默认附带实时开播状态） |
+| `POST /api/bilibili/rooms` | 动态添加频道（需 token） |
+| `DELETE /api/bilibili/rooms/<room_id>` | 删除动态频道（需 token） |
 
 ## 五、配置说明（config.py）
 
 | 配置 | 默认 | 说明 |
 |---|---|---|
-| `BILIBILI_ROOMS` | 央视新闻/河南卫视/中国应急管理 | 频道列表：`{"name": 频道名, "uid": UP主UID}` |
+| `BILIBILI_ROOMS` | 央视新闻/河南卫视/中国应急管理 | 静态频道列表：`{"name", "room_id"}` 或 `{"name", "uid"}` |
+| `BILIBILI_CUSTOM_ROOMS_PATH` | `xml_data/bilibili_custom_rooms.json` | 运行时动态添加的频道（API 写入，重启不丢） |
 | `BILIBILI_REFERER` | `https://live.bilibili.com/` | 防盗链 Referer |
 | `BILIBILI_UA` | Chrome UA | 请求 UA |
+| `BILIBILI_COOKIE` | 空 | B 站登录 SESSDATA（解锁蓝光/原画；留空 = 游客 720P） |
 | `BILIBILI_PLAY_CACHE_TTL` | 1800s | 流地址内存缓存 |
-| `BILIBILI_CACHE_PATH` | `xml_data/bilibili_rooms.json` | 房间号磁盘缓存 |
+| `BILIBILI_CACHE_PATH` | `xml_data/bilibili_rooms.json` | uid→房间号解析磁盘缓存 |
 | `BILIBILI_GROUP_NAME` | `B站直播` | 输出分组名 |
 | `PUBLIC_BASE_URL` | `http://localhost:5002` | 聚合生成的频道 URL 基础地址（**容器/生产必须覆盖**为播放器可达地址） |
 | `BILIBILI_DIRECT_SEGMENTS` | `true` | 分片直连 CDN（省服务器带宽）；`false` 回退全代理 |
 | `BILIBILI_ONLY_MODE` | `true` | 测试模式开关 |
 
-### 新增频道
+### 新增频道（两种方式）
+
+**方式一：运行时 API 动态添加（推荐，无需改配置重启）**
+
+```bash
+# 查看当前频道
+curl "http://IP:5002/api/bilibili/rooms"
+
+# 添加（需 API_TOKEN）
+curl -X POST "http://IP:5002/api/bilibili/rooms" \
+  -H "Authorization: Bearer <API_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"XX卫视","room_id":123456}'
+
+# 删除
+curl -X DELETE "http://IP:5002/api/bilibili/rooms/123456" \
+  -H "Authorization: Bearer <API_TOKEN>"
+```
+
+或用校验脚本（自动验证房间存在/在播）：
+```bash
+python scripts/add_bili_room.py 123456                          # 验证 + 打印配置行
+python scripts/add_bili_room.py 123456 "XX卫视" --api http://IP:5002 --token <API_TOKEN>   # 直接调 API 添加
+```
+
+**方式二：改静态配置（config.py，重启生效）**
 
 ```python
 BILIBILI_ROOMS = [
-    {"name": "央视新闻", "uid": 222103174},       # 默认
-    {"name": "河南卫视", "uid": 2057655323},       # 默认
-    {"name": "中国应急管理", "uid": 3707002299615617},  # 默认
-    {"name": "新频道", "uid": <UP主UID>},         # 手动新增
+    {"name": "央视新闻", "room_id": 8178490},       # 推荐：房间号即 live.bilibili.com/<房间号> 的数字
+    {"name": "河南卫视", "uid": 2057655323},         # 兼容：填 UP 主 UID
+    {"name": "新频道", "room_id": <房间号>},
 ]
 ```
 
-UID 获取：`curl "https://api.live.bilibili.com/room/v1/Room/room_init?id=<房间号>"` 响应里的 `uid` 字段；或 UP 主空间地址 `space.bilibili.com/<UID>` 的数字。
+- 房间号获取：直播间网址 `live.bilibili.com/<房间号>` 的数字，**无需查 uid**
+- 房间号唯一，静态配置优先（动态添加的同房间会被忽略）
+- 添加后立即异步刷新生效（不与定时任务并发）；无效房间靠开播判定自动跳过
 
 ## 六、稳定性设计与已知限制
+
+### 清晰度与登录 Cookie
+
+B 站直播清晰度受**登录态**限制：
+
+| 状态 | 效果 |
+|---|---|
+| 未配置 cookie（游客） | 最高 720P（超清 250 档） |
+| 配置 `BILIBILI_COOKIE`（登录 SESSDATA） | 解锁蓝光 1080P / 原画（取决于直播间推流与账号等级） |
+
+**原理**（实测验证）：
+- 旧接口 `playUrl` 即使登录也只给 720P；高清须走**新接口 `getRoomPlayInfo`**
+- 新接口带有效 SESSDATA → `current_qn=10000`（原画），流地址无 `_2500` 后缀、码率显著提升
+- 仅 `SESSDATA` 即可解锁（HttpOnly cookie，需从 DevTools Network 抓取，`document.cookie` 读不到）
+
+**配置方法**（`.env`，与密钥同等敏感，勿提交）：
+```
+BILIBILI_COOKIE=SESSDATA=你的SESSDATA值
+```
+
+**自动降级**：cookie 失效/新接口异常 → 自动回退旧接口游客 720P，链路不中断；解析时会探测登录态，失效打日志提示更新。
+
+### 备用线路切换
+
+`durl`/`url_info` 天然返回多条 CDN 线路（主 + 备用，内容相同），服务**主线路故障自动切备用**，全部失败才强制重解析。对播放器无感（频道/URL 不变）。
 
 ### 已做的容错
 
 - 所有上游请求 try/except，失败只记日志不崩溃
+- 解析双接口降级链：新接口（高清）→ 旧接口（720P 兜底）→ None
+- cookie 失效自动降级游客画质，并探测登录态打日志提示
+- CDN 多线路自动切换（主节点故障自动切备用）
 - 房间号解析磁盘缓存兜底
 - 签名过期自动重解析重试（主清单 + 分片两层）
 - 聚合失败优雅降级，B 站分组消失不影响 hntv/公开源
