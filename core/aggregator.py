@@ -12,15 +12,16 @@ from config import (AGGREGATED_M3U_PATH, BILIBILI_GROUP_NAME, BILIBILI_ONLY_MODE
 from core.atomic_io import atomic_write_text
 from core.bilibili import BilibiliUtils
 from core.hntv_client import ApiUtils
+from core.logger import get_logger
 from core.probing import probe_stream
 from core.sources import SourceUtils
 
+_logger = get_logger('aggregator')
+
 
 def _log(msg):
-    """聚合日志统一加线程名前缀，便于区分后台两个刷新线程的轮次"""
-    name = threading.current_thread().name
-    prefix = f"[{name}] " if name else ""
-    print(f"{prefix}{msg}")
+    """聚合日志统一走 logger（线程名由 logger format 自动带上）"""
+    _logger.info(msg)
 
 
 # 异步刷新协调：POST 添加/删除房间后请求立即聚合刷新。

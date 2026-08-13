@@ -20,6 +20,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
+from core.logger import get_logger
+
 from config import (BILIBILI_CACHE_PATH, BILIBILI_COOKIE,
                     BILIBILI_CUSTOM_ROOMS_PATH, BILIBILI_DIRECT_SEGMENTS,
                     BILIBILI_PLAY_CACHE_TTL, BILIBILI_REFERER, BILIBILI_UA)
@@ -30,6 +32,9 @@ PLAY_URL_API = "https://api.live.bilibili.com/room/v1/Room/playUrl"
 PLAY_INFO_API = "https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo"
 # 登录态校验接口（cookie 有效性探测）
 NAV_API = "https://api.bilibili.com/x/web-interface/nav"
+
+_logger = get_logger('bilibili')
+
 
 # 内存缓存锁：保护 _play_cache 与房间信息缓存
 _cache_lock = threading.Lock()
@@ -83,7 +88,7 @@ class BilibiliUtils:
                     data = json.load(f)
                     return data if isinstance(data, dict) else {}
         except Exception as e:
-            print(f"读取 B 站房间缓存出错: {str(e)}")
+            _logger.warning(f"读取 B 站房间缓存出错: {str(e)}")
         return {}
 
     @staticmethod
@@ -95,7 +100,7 @@ class BilibiliUtils:
                 json.dump(cache, f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, BILIBILI_CACHE_PATH)
         except Exception as e:
-            print(f"保存 B 站房间缓存出错: {str(e)}")
+            _logger.warning(f"保存 B 站房间缓存出错: {str(e)}")
 
     # ------------------------------------------------------------ 动态频道列表
 
@@ -111,7 +116,7 @@ class BilibiliUtils:
                     data = json.load(f)
                     return data if isinstance(data, list) else []
         except Exception as e:
-            print(f"读取 B 站动态频道列表出错: {str(e)}")
+            _logger.warning(f"读取 B 站动态频道列表出错: {str(e)}")
         return []
 
     @staticmethod
@@ -123,7 +128,7 @@ class BilibiliUtils:
                 json.dump(rooms, f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, BILIBILI_CUSTOM_ROOMS_PATH)
         except Exception as e:
-            print(f"保存 B 站动态频道列表出错: {str(e)}")
+            _logger.warning(f"保存 B 站动态频道列表出错: {str(e)}")
 
     @staticmethod
     def add_custom_room(name, room_id):
@@ -175,7 +180,7 @@ class BilibiliUtils:
                 "online": info.get('online', 0),
             }
         except Exception as e:
-            print(f"解析 B 站房间信息出错(uid={uid}): {str(e)}")
+            _logger.warning(f"解析 B 站房间信息出错(uid={uid}): {str(e)}")
             return None
 
     @staticmethod
@@ -328,7 +333,7 @@ class BilibiliUtils:
                     _play_cache[room_id] = (now + BILIBILI_PLAY_CACHE_TTL, result)
                 return result
         except Exception as e:
-            print(f"解析 B 站流地址出错(room={room_id}): {str(e)}")
+            _logger.warning(f"解析 B 站流地址出错(room={room_id}): {str(e)}")
         return None
 
     # ------------------------------------------------------------ 开播判定
@@ -402,7 +407,7 @@ class BilibiliUtils:
         response, route = BilibiliUtils._try_routes(
             room_id, resolved, lambda r: r[0])
         if response is None:
-            print(f"拉取 B 站 m3u8 清单出错(room={room_id})")
+            _logger.warning(f"拉取 B 站 m3u8 清单出错(room={room_id})")
             return None
         _m3u8_url, base_url, query = route
 

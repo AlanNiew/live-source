@@ -8,6 +8,9 @@ from config import (CHECK_INTERVAL, CHECK_WINDOW_END_HOUR,
                     STREAM_CHECK_INTERVAL)
 from monitoring.checks import CheckUtils
 
+from core.logger import get_logger
+_logger = get_logger('scheduler')
+
 
 class MonitorScheduler:
     """健康监控定时调度"""
@@ -38,7 +41,7 @@ class MonitorScheduler:
 
         def monitor_loop():
             # 首次启动延迟，等聚合任务跑完首次，避免启动初期频道数未达阈值误报
-            print(f"健康监控将在 {STARTUP_DELAY} 秒后开始"
+            _logger.info(f"健康监控将在 {STARTUP_DELAY} 秒后开始"
                   f"（检测时段：GMT+8 {CHECK_WINDOW_START_HOUR}:00-{CHECK_WINDOW_END_HOUR}:00）")
             time.sleep(STARTUP_DELAY)
 
@@ -46,12 +49,12 @@ class MonitorScheduler:
                 try:
                     wait = MonitorScheduler._window_wait_seconds()
                     if wait > 0:
-                        print(f"非检测时段，等待 {wait / 3600:.1f} 小时后恢复检测")
+                        _logger.info(f"非检测时段，等待 {wait / 3600:.1f} 小时后恢复检测")
                         time.sleep(wait)
                         continue
                     CheckUtils.run_check_once()
                 except Exception as e:
-                    print(f"健康检测循环出错: {str(e)}")
+                    _logger.warning(f"健康检测循环出错: {str(e)}")
                 time.sleep(CHECK_INTERVAL)
 
         monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
@@ -61,18 +64,18 @@ class MonitorScheduler:
         def stream_loop():
             # 首次延迟比常规检测稍久，等聚合缓存生成
             time.sleep(STARTUP_DELAY + 30)
-            print(f"流地址全量探测将在 {STARTUP_DELAY + 30} 秒后开始，"
+            _logger.info(f"流地址全量探测将在 {STARTUP_DELAY + 30} 秒后开始，"
                   f"之后每 {STREAM_CHECK_INTERVAL} 秒一轮")
             while True:
                 try:
                     wait = MonitorScheduler._window_wait_seconds()
                     if wait > 0:
-                        print(f"非检测时段，流探测等待 {wait / 3600:.1f} 小时后恢复")
+                        _logger.info(f"非检测时段，流探测等待 {wait / 3600:.1f} 小时后恢复")
                         time.sleep(wait)
                         continue
                     CheckUtils.run_stream_check_once()
                 except Exception as e:
-                    print(f"流探测循环出错: {str(e)}")
+                    _logger.warning(f"流探测循环出错: {str(e)}")
                 time.sleep(STREAM_CHECK_INTERVAL)
 
         stream_thread = threading.Thread(target=stream_loop, daemon=True)

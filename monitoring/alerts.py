@@ -5,6 +5,9 @@ import time
 
 from config import EMAIL_MODULE_PATH, EMAIL_TEMPLATE_PATH
 
+from core.logger import get_logger
+_logger = get_logger('alerts')
+
 
 class AlertUtils:
     """告警邮件工具类（构建 HTML + 发送）"""
@@ -57,7 +60,7 @@ class AlertUtils:
             with open(EMAIL_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
                 template = f.read()
         except Exception as e:
-            print(f"读取邮件模板失败，使用空模板: {str(e)}")
+            _logger.warning(f"读取邮件模板失败，使用空模板: {str(e)}")
             template = '{rows}'
 
         return template.format(
@@ -91,7 +94,7 @@ class AlertUtils:
             email_addr = os.environ.get('email', '').strip()
             email_pwd = os.environ.get('password', '').strip()
             if not email_addr or not email_pwd:
-                print("告警邮件未发送：未配置 email/password 环境变量")
+                _logger.warning("告警邮件未发送：未配置 email/password 环境变量")
                 return
 
             # 根据 .env 的邮箱地址推断类型（qq/163 等），默认 qq
@@ -120,8 +123,8 @@ class AlertUtils:
                 content_type='html',
             )
             if sent:
-                print(f"告警邮件已发送: [{level}] {subject}")
+                _logger.info(f"告警邮件已发送: [{level}] {subject}")
             else:
-                print(f"告警邮件发送失败: [{level}] {subject}")
+                _logger.warning(f"告警邮件发送失败: [{level}] {subject}")
         except Exception as e:
-            print(f"发送告警邮件出错: {str(e)}")
+            _logger.warning(f"发送告警邮件出错: {str(e)}")

@@ -1,7 +1,10 @@
 """监控状态机测试：分组阈值判定、卫视仅日志不告警、恢复通知、列表失败告警"""
+import os
+import tempfile
 import unittest
 from unittest import mock
 
+from admin import db
 from config import XML_DATA_DIR
 from monitoring.checks import CheckUtils
 
@@ -10,6 +13,14 @@ class StreamCheckStateMachineTest(unittest.TestCase):
     """流探测状态机测试（mock fetch/probe/send_alert，验证翻转与分组判定）"""
 
     def setUp(self):
+        # 隔离监控落库：用临时 DB，验证落库代码真实执行且不污染生产库
+        self.tmp_dir = tempfile.mkdtemp()
+        self.patcher_db = mock.patch('admin.db.ADMIN_DB_PATH',
+                                     os.path.join(self.tmp_dir, 'test.db'))
+        self.patcher_db.start()
+        self.addCleanup(self.patcher_db.stop)
+        db.init_db()
+
         self.mails = []
         self.items = []
 

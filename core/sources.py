@@ -5,6 +5,9 @@ import requests
 
 from config import (CARRIER_IP_PREFIXES, CCTV_NAME_MAP, DEFAULT_GROUP_NAME,
                     PUBLIC_M3U_SOURCES, SIGN_PARAM_PAT)
+from core.logger import get_logger
+
+_logger = get_logger('sources')
 
 
 class SourceUtils:
@@ -20,12 +23,12 @@ class SourceUtils:
         try:
             response = requests.get(url, timeout=20)
             if response.status_code != 200:
-                print(f"拉取公开源失败({response.status_code}): {url}")
+                _logger.warning(f"拉取公开源失败({response.status_code}): {url}")
                 return ""
-            print(f"拉取公开源成功: {url}")
+            _logger.info(f"拉取公开源成功: {url}")
             return response.text
         except Exception as e:
-            print(f"拉取公开源出错: {url} -> {str(e)}")
+            _logger.warning(f"拉取公开源出错: {url} -> {str(e)}")
             return ""
 
     @staticmethod
@@ -177,7 +180,7 @@ class SourceUtils:
 
             # 3. 其余全部过滤（地方台/英文台/付费频道/国际版等）
 
-        print(f"过滤+中文化：{len(channels)} 个 -> 保留 {len(result)} 个（央视+卫视）")
+        _logger.info(f"过滤+中文化：{len(channels)} 个 -> 保留 {len(result)} 个（央视+卫视）")
         return result
 
     @staticmethod

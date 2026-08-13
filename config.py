@@ -152,6 +152,18 @@ GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2, BILIBILI_GROUP_NAME
 # 正式使用设 BILIBILI_ONLY_MODE=false 恢复完整聚合）
 BILIBILI_ONLY_MODE = os.environ.get('BILIBILI_ONLY_MODE', 'true').lower() == 'true'
 
+# ---------------------------------------------------------------- 管理后台
+# 管理界面/管理 API 的登录密码（session 鉴权；留空 = 禁用管理功能，安全默认）
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '').strip()
+# 管理数据 SQLite 单文件（源配置/频道覆盖/监控历史/日志）
+ADMIN_DB_PATH = os.environ.get('ADMIN_DB_PATH', os.path.join(XML_DATA_DIR, 'admin.db'))
+# 滚动日志文件路径（logging 双 handler：文件 + SQLite logs 表）
+LOG_FILE_PATH = os.environ.get('LOG_FILE_PATH', os.path.join(XML_DATA_DIR, 'app.log'))
+# 历史数据保留上限（清理策略，防 DB 无限膨胀）
+MONITOR_HISTORY_KEEP = int(os.environ.get('MONITOR_HISTORY_KEEP', '500'))     # 常规检测轮数
+STREAM_HISTORY_KEEP = int(os.environ.get('STREAM_HISTORY_KEEP', '2000'))      # 流探测条数
+LOG_KEEP_DAYS = int(os.environ.get('LOG_KEEP_DAYS', '7'))                     # 日志保留天数
+
 # ---------------------------------------------------------------- 监控
 # 检测目标（monitor 跑在 api 容器内部，自检用容器内端口 5002；
 # 宿主机映射端口 15002 在容器内连不上。若未来加 nginx 反代，用环境变量覆盖）
