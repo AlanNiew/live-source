@@ -4,14 +4,23 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from config import (AGGREGATED_M3U_PATH, FILTER_UNREACHABLE, GROUP_ORDER,
-                    HNTV_GROUP_NAME, PUBLIC_CHANNELS_CACHE_PATH,
-                    STREAM_CHECK_CONCURRENCY, STREAM_FAILURES_PATH,
-                    STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE)
+from config import (AGGREGATED_M3U_PATH, BILIBILI_GROUP_NAME, BILIBILI_ONLY_MODE,
+                    BILIBILI_ROOMS, FILTER_UNREACHABLE, GROUP_ORDER,
+                    HNTV_GROUP_NAME, PUBLIC_BASE_URL,
+                    PUBLIC_CHANNELS_CACHE_PATH, STREAM_CHECK_CONCURRENCY,
+                    STREAM_FAILURES_PATH, STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE)
 from core.atomic_io import atomic_write_text
+from core.bilibili import BilibiliUtils
 from core.hntv_client import ApiUtils
 from core.probing import probe_stream
 from core.sources import SourceUtils
+
+
+def _log(msg):
+    """聚合日志统一加线程名前缀，便于区分后台两个刷新线程的轮次"""
+    name = threading.current_thread().name
+    prefix = f"[{name}] " if name else ""
+    print(f"{prefix}{msg}")
 
 
 class AggregatorUtils:
@@ -59,8 +68,36 @@ class AggregatorUtils:
                         if ch:
                             hntv_channels.append(ch)
         except Exception as e:
-            print(f"拉取 hntv 官方源出错: {str(e)}")
+            _log(f"拉取 hntv 官方源出错: {str(e)}")
         return hntv_channels
+
+    @staticmethod
+    def fetch_bilibili_channels():
+        """
+        拉取 B 站直播频道（开播的才加入，未开播自动跳过）：
+        - 通过 uid 解析房间号（接口失败用磁盘缓存兜底）
+        - 实测主清单判定在播（playUrl 解析结果不可信，未开播也返回地址）
+        - 地址为本服务代理 URL（播放器直连原始地址会 403 防盗链）
+        :return: B 站直播频道 dict 列表（可能为空）
+        """
+        channels = []
+        for item in BILIBILI_ROOMS:
+            name = item["name"]
+            room_id = BilibiliUtils.get_room_id(item["uid"])
+            if room_id is None:
+                _log(f"B站直播跳过（房间号解析失败）: {name}")
+                continue
+            if not BilibiliUtils.is_live(room_id):
+                _log(f"B站直播跳过（未开播）: {name} (room={room_id})")
+                continue
+            channels.append({
+                "name": name,
+                "url": f"{PUBLIC_BASE_URL.rstrip('/')}/api/bilibili/{room_id}/live.m3u8",
+                "group_title": BILIBILI_GROUP_NAME,
+                "tvg_name": name,
+            })
+            _log(f"B站直播已加入: {name} (room={room_id})")
+        return channels
 
     @staticmethod
     def pick_best_public(public_channels):
@@ -84,17 +121,20 @@ class AggregatorUtils:
         return public_best
 
     @staticmethod
-    def aggregate_m3u(hntv_channels, public_channels):
+    def aggregate_m3u(hntv_channels, public_channels, bilibili_channels=None):
         """
-        合并 hntv 官方频道与公开源频道：
+        合并 hntv 官方频道、公开源频道与 B 站直播频道：
         - 按频道名去重，hntv 官方源优先（同名保留官方地址）
         - 公开源只补充 hntv 没有的频道
         - 公开源内同台多个分辨率时，保留清晰度最高的一个
+        - B 站直播频道独立分组，不参与同台去重（频道名不冲突）
         注：可达性探测过滤已在 prepare_public_channels 阶段完成（官方源永不探测）
         :param hntv_channels: hntv 官方频道列表（优先级最高）
         :param public_channels: 公开源频道列表（已过滤+中文化+探测过滤）
+        :param bilibili_channels: B 站直播频道列表（已判定开播，可选）
         :return: 合并后的 m3u 文本
         """
+        bilibili_channels = bilibili_channels or []
         merged = {}
         order = []  # 保持频道出现顺序，便于结果可读
 
@@ -112,7 +152,14 @@ class AggregatorUtils:
                 merged[key] = ch
                 order.append(key)
 
-        # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后），其余兜底
+        # B 站直播频道（独立分组，直接追加；不参与去重）
+        for ch in bilibili_channels:
+            key = SourceUtils.normalize_name(ch["name"])
+            if key not in merged:
+                merged[key] = ch
+                order.append(key)
+
+        # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后）-> B站直播，其余兜底
         order.sort(key=lambda k: GROUP_ORDER.get(merged[k]["group_title"], 3))
 
         # 生成 m3u 文本
@@ -130,8 +177,9 @@ class AggregatorUtils:
                 f'{ch["url"]}\n\n'
             )
 
-        print(f"聚合完成：hntv {len(hntv_channels)} 个 + 公开补充 "
-              f"{len(merged) - len(hntv_channels)} 个 = 共 {len(merged)} 个频道")
+        _log(f"聚合完成：hntv {len(hntv_channels)} 个 + 公开补充 "
+              f"{len(merged) - len(hntv_channels) - len(bilibili_channels)} 个 + "
+              f"B站直播 {len(bilibili_channels)} 个 = 共 {len(merged)} 个频道")
         return m3u_content
 
     # ------------------------------------------------------------ 探测过滤
@@ -145,7 +193,7 @@ class AggregatorUtils:
                     data = json.load(f)
                     return data if isinstance(data, dict) else {}
         except Exception as e:
-            print(f"读取失败记录出错: {str(e)}")
+            _log(f"读取失败记录出错: {str(e)}")
         return {}
 
     @staticmethod
@@ -154,7 +202,7 @@ class AggregatorUtils:
         try:
             atomic_write_text(STREAM_FAILURES_PATH, json.dumps(failures, ensure_ascii=False, indent=2))
         except Exception as e:
-            print(f"保存失败记录出错: {str(e)}")
+            _log(f"保存失败记录出错: {str(e)}")
 
     @staticmethod
     def filter_unreachable(channels):
@@ -198,9 +246,9 @@ class AggregatorUtils:
                     kept.append(ch)  # 第一轮失败保留，给第二次机会
 
         if dropped:
-            print(f"探测过滤：丢弃 {len(dropped)} 个连续 {STREAM_FAIL_LIMIT} 轮不可达的频道")
+            _log(f"探测过滤：丢弃 {len(dropped)} 个连续 {STREAM_FAIL_LIMIT} 轮不可达的频道")
             for ch in dropped:
-                print(f"  丢弃: {ch['name']}")
+                _log(f"  丢弃: {ch['name']}")
 
         # 保存失败记录（只保留本轮探测过的 URL，自动裁剪过期项）
         failures = {u: c for u, c in failures.items() if u in probed_urls}
@@ -229,7 +277,7 @@ class AggregatorUtils:
             atomic_write_text(PUBLIC_CHANNELS_CACHE_PATH,
                               json.dumps(channels, ensure_ascii=False, indent=2))
         except Exception as e:
-            print(f"保存公开源缓存出错: {str(e)}")
+            _log(f"保存公开源缓存出错: {str(e)}")
 
     @staticmethod
     def _load_public_channels():
@@ -243,7 +291,7 @@ class AggregatorUtils:
                     data = json.load(f)
                     return data if isinstance(data, list) else None
         except Exception as e:
-            print(f"读取公开源缓存出错: {str(e)}")
+            _log(f"读取公开源缓存出错: {str(e)}")
         return None
 
     @staticmethod
@@ -255,12 +303,12 @@ class AggregatorUtils:
         :return: 聚合后的 m3u 文本；失败或被占用返回 None
         """
         if not AggregatorUtils._aggregate_lock.acquire(blocking=False):
-            print("聚合已在运行中，跳过本次聚合")
+            _log("聚合已在运行中，跳过本次聚合")
             return None
         try:
             return AggregatorUtils._get_aggregated_m3u_locked()
         except Exception as e:
-            print(f"生成聚合 m3u 出错: {str(e)}")
+            _log(f"生成聚合 m3u 出错: {str(e)}")
             return None
         finally:
             AggregatorUtils._aggregate_lock.release()
@@ -269,21 +317,32 @@ class AggregatorUtils:
     def _get_aggregated_m3u_locked():
         """聚合内部实现（调用方必须已持有 _aggregate_lock）"""
         try:
-            # 1. 拉取 hntv 官方频道
-            hntv_channels = AggregatorUtils.fetch_hntv_channels()
+            # B 站测试模式：跳过 hntv 官方源与公开源拉取，只收集 B 站直播频道
+            # （频繁重启测试时避免拉公开源+探测 70 频道拖慢启动）
+            if BILIBILI_ONLY_MODE:
+                _log("测试模式（BILIBILI_ONLY_MODE）：跳过 hntv/公开源，仅聚合 B 站直播")
+                hntv_channels = []
+                public_channels = []
+            else:
+                # 1. 拉取 hntv 官方频道
+                hntv_channels = AggregatorUtils.fetch_hntv_channels()
 
-            # 2. 准备公开源频道（拉源+过滤+择优+探测过滤）并缓存
-            public_channels = AggregatorUtils.prepare_public_channels()
-            AggregatorUtils._save_public_channels(public_channels)
+                # 2. 准备公开源频道（拉源+过滤+择优+探测过滤）并缓存
+                public_channels = AggregatorUtils.prepare_public_channels()
+                AggregatorUtils._save_public_channels(public_channels)
 
-            # 3. 合并生成 m3u 并落盘（原子写入）
-            m3u_content = AggregatorUtils.aggregate_m3u(hntv_channels, public_channels)
+            # 3. 收集 B 站直播频道（开播判定）
+            bilibili_channels = AggregatorUtils.fetch_bilibili_channels()
+
+            # 4. 合并生成 m3u 并落盘（原子写入）
+            m3u_content = AggregatorUtils.aggregate_m3u(
+                hntv_channels, public_channels, bilibili_channels)
             atomic_write_text(AGGREGATED_M3U_PATH, m3u_content)
-            print(f"聚合结果已保存到 {AGGREGATED_M3U_PATH}")
+            _log(f"聚合结果已保存到 {AGGREGATED_M3U_PATH}")
 
             return m3u_content
         except Exception as e:
-            print(f"生成聚合 m3u 出错: {str(e)}")
+            _log(f"生成聚合 m3u 出错: {str(e)}")
             return None
 
     @staticmethod
@@ -295,20 +354,29 @@ class AggregatorUtils:
         :return: 聚合后的 m3u 文本；失败时返回 None
         """
         try:
-            hntv_channels = AggregatorUtils.fetch_hntv_channels()
+            # B 站测试模式：跳过 hntv 官方源与公开源，仅刷新 B 站直播频道
+            if BILIBILI_ONLY_MODE:
+                _log("测试模式（BILIBILI_ONLY_MODE）：官方源刷新跳过 hntv/公开源")
+                hntv_channels = []
+                public_channels = []
+            else:
+                hntv_channels = AggregatorUtils.fetch_hntv_channels()
 
-            public_channels = AggregatorUtils._load_public_channels()
-            if public_channels is None:
-                print("公开源缓存未就绪，回退完整聚合")
-                return AggregatorUtils.get_aggregated_m3u()
+                public_channels = AggregatorUtils._load_public_channels()
+                if public_channels is None:
+                    _log("公开源缓存未就绪，回退完整聚合")
+                    return AggregatorUtils.get_aggregated_m3u()
 
-            m3u_content = AggregatorUtils.aggregate_m3u(hntv_channels, public_channels)
+            bilibili_channels = AggregatorUtils.fetch_bilibili_channels()
+            m3u_content = AggregatorUtils.aggregate_m3u(
+                hntv_channels, public_channels, bilibili_channels)
             atomic_write_text(AGGREGATED_M3U_PATH, m3u_content)
-            print(f"官方源刷新完成，已更新 {AGGREGATED_M3U_PATH}"
-                  f"（hntv {len(hntv_channels)} 个 + 公开 {len(public_channels)} 个）")
+            _log(f"官方源刷新完成，已更新 {AGGREGATED_M3U_PATH}"
+                  f"（hntv {len(hntv_channels)} 个 + 公开 {len(public_channels)} 个 + "
+                  f"B站直播 {len(bilibili_channels)} 个）")
             return m3u_content
         except Exception as e:
-            print(f"官方源刷新出错: {str(e)}")
+            _log(f"官方源刷新出错: {str(e)}")
             return None
 
     @staticmethod
@@ -325,18 +393,34 @@ class AggregatorUtils:
                 with open(AGGREGATED_M3U_PATH, 'r', encoding='utf-8') as f:
                     return f.read()
             # 不存在则生成
-            print("聚合缓存文件不存在，触发首次生成")
+            _log("聚合缓存文件不存在，触发首次生成")
             content = AggregatorUtils.get_aggregated_m3u()
             if content:
                 return content
-            # 聚合失败或被占用（后台聚合进行中）→ 降级为 hntv 官方源，保证有内容返回
-            print("聚合不可用（生成失败或进行中），降级返回 hntv 官方源")
+            # 聚合失败或被占用（后台聚合进行中）→ 降级保证有内容返回：
+            # 测试模式返回 B 站列表（不碰 hntv/公开源），正式模式返回 hntv 官方源
+            _log("聚合不可用（生成失败或进行中），降级返回 "
+                  + ("B站直播" if BILIBILI_ONLY_MODE else "hntv 官方源"))
+            if BILIBILI_ONLY_MODE:
+                return AggregatorUtils.get_bilibili_only_m3u()
             return AggregatorUtils.get_hntv_only_m3u()
         except Exception as e:
-            print(f"读取聚合缓存出错: {str(e)}")
+            _log(f"读取聚合缓存出错: {str(e)}")
             return "#EXTM3U\n# 读取聚合缓存出错\n"
 
     # ------------------------------------------------------------ 降级路径
+
+    @staticmethod
+    def get_bilibili_only_m3u():
+        """仅返回 B 站直播频道（测试模式的降级路径，不碰 hntv/公开源）"""
+        m3u_content = "#EXTM3U\n\n"
+        for ch in AggregatorUtils.fetch_bilibili_channels():
+            m3u_content += (
+                f'#EXTINF:-1 tvg-id="{ch["name"]}" tvg-name="{ch["name"]}" '
+                f'group-title="{ch["group_title"]}",{ch["name"]}\n'
+                f'{ch["url"]}\n\n'
+            )
+        return m3u_content
 
     @staticmethod
     def get_hntv_only_m3u():
@@ -372,8 +456,8 @@ class AggregatorUtils:
             aggregated = AggregatorUtils.load_aggregated_m3u()
             if aggregated and "#EXTM3U" in aggregated:
                 return aggregated
-            print("聚合结果为空，降级为 hntv 官方源")
+            _log("聚合结果为空，降级为 hntv 官方源")
         except Exception as e:
-            print(f"读取聚合结果失败，降级为 hntv 官方源: {str(e)}")
+            _log(f"读取聚合结果失败，降级为 hntv 官方源: {str(e)}")
 
         return AggregatorUtils.get_hntv_only_m3u()

@@ -8,7 +8,8 @@ import datetime
 import threading
 import time
 
-from config import AGGREGATE_REFRESH_INTERVAL, GMT8, OFFICIAL_REFRESH_INTERVAL
+from config import (AGGREGATE_REFRESH_INTERVAL, BILIBILI_ONLY_MODE, GMT8,
+                    OFFICIAL_REFRESH_INTERVAL)
 from core.aggregator import AggregatorUtils
 from core.epg import XmlUtils
 from monitoring.scheduler import MonitorScheduler
@@ -42,7 +43,9 @@ def schedule_aggregate_refresh():
     """
     聚合刷新（双频率）：
     - 公开源线程：启动立即 + 每 6h 拉公开源/探测过滤/合并（get_aggregated_m3u）
-    - 官方源线程：启动立即 + 每 1h 只拉 hntv 官方源刷新签名地址（refresh_official_only）
+    - 官方源线程：启动立即 + 每 3h 只拉 hntv 官方源刷新签名地址（refresh_official_only）
+    - B 站测试模式（BILIBILI_ONLY_MODE=true）：聚合里只有 B 站频道、没有 hntv 签名要刷新，
+      官方源线程与公开源线程做的是同一件事，跳过官方源线程避免重复采集
     """
     def public_loop():
         while True:
@@ -55,8 +58,12 @@ def schedule_aggregate_refresh():
                 print(f"定时刷新聚合 m3u 出错: {str(e)}")
                 time.sleep(60)  # 出错后等 1 分钟再试，避免狂跑
 
-    public_thread = threading.Thread(target=public_loop, daemon=True)
+    public_thread = threading.Thread(target=public_loop, daemon=True, name='聚合-公开源')
     public_thread.start()
+
+    if BILIBILI_ONLY_MODE:
+        print("测试模式（BILIBILI_ONLY_MODE）：跳过官方源刷新线程（无 hntv 签名需刷新）")
+        return
 
     def official_loop():
         # 稍等公开源线程完成首次聚合（公开缓存未就绪时 refresh_official_only 会自动回退全量）
@@ -70,7 +77,7 @@ def schedule_aggregate_refresh():
                 print(f"官方源刷新出错: {str(e)}")
                 time.sleep(60)
 
-    official_thread = threading.Thread(target=official_loop, daemon=True)
+    official_thread = threading.Thread(target=official_loop, daemon=True, name='聚合-官方源')
     official_thread.start()
 
 

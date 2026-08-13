@@ -6,6 +6,7 @@
 
 - **HNTV 官方接口封装**：带签名鉴权（`timestamp` + `sign`）的直播列表 / EPG 数据代理
 - **多源 m3u 聚合**：HNTV 官方 + 3 个公开源（iptv-org / hujingguang / wwb521），按地址质量择优去重，分组输出（河南卫视 → 央视 → 卫视）
+- **B 站直播接入**：配置 `BILIBILI_ROOMS` 的 UP 主 uid，开播判定后以代理地址加入列表（B 站 CDN 防盗链校验 Referer，播放器直连 403，必须经本服务 m3u8 重写 + 分片反代）
 - **可达性探测过滤**：聚合时对公开源频道做探测，连续两轮不可达才丢弃，保证列表里都是可用源
 - **EPG 节目单**：每日自动生成 XML / gzip 压缩版，供播放器回看/节目信息
 - **健康监控告警**：定期检测服务存活/频道数/EPG/流地址可达性，异常时邮件告警（状态翻转才发，不轰炸）
@@ -21,6 +22,7 @@
 ├── scheduling.py         # 三个 daemon 线程统一入口 start_all()
 ├── core/                 # 业务核心（零 Flask 依赖）
 │   ├── hntv_client.py    # HNTV 官方 API 鉴权与请求
+│   ├── bilibili.py      # B 站直播：房间解析/流解析/m3u8 重写/分片反代
 │   ├── epg.py            # EPG XML 生成/读取/时间格式化
 │   ├── sources.py        # 公开源拉取/解析/评分/过滤中文化
 │   ├── aggregator.py     # 聚合编排/探测过滤/缓存/降级
@@ -58,7 +60,26 @@ password=邮箱授权码（QQ/163 在邮箱设置中获取）
 
 > 注意：`.env` 已被 git 移除跟踪并加入 `.gitignore`（历史中已清除），修改不会产生 git 冲突；**不要提交或打印其内容**，密钥变更需同步服务器 `.env`。
 
-### 2. 安装依赖（清华镜像加速）
+### 2. B 站直播频道（可选，默认已含央视新闻/河南卫视/中国应急管理）
+
+在 `config.py` 的 `BILIBILI_ROOMS` 里新增一行即可：
+
+```python
+BILIBILI_ROOMS = [
+    {"name": "央视新闻", "uid": 222103174},       # 默认频道
+    {"name": "河南卫视", "uid": 2057655323},       # 默认频道
+    {"name": "中国应急管理", "uid": 3707002299615617},  # 默认频道
+    {"name": "你想要的频道", "uid": 123456789},    # 手动新增：频道名 + UP 主 UID
+]
+```
+
+**UID 获取方法**（二选一）：
+- 打开目标直播间，用 `curl "https://api.live.bilibili.com/room/v1/Room/room_init?id=<房间号>"`，响应里 `uid` 字段即 UP 主 UID（房间号取直播间网址 `live.bilibili.com/<房间号>` 的数字）
+- 或直接打开 UP 主空间主页 `space.bilibili.com/<UID>`，地址栏的数字就是 UID
+
+新增后删除 `xml_data/aggregated.m3u` 再重启，等下一次聚合（或手动触发）生效。
+
+### 3. 安装依赖（清华镜像加速）
 
 ```bash
 pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
@@ -98,6 +119,9 @@ gunicorn -c gunicorn.conf.py main:app
 | `GET /api/live.xml.gz` | 无 | EPG 节目单 gzip 压缩版 |
 | `GET /api/proxy` | Bearer token | 代理 HNTV 官方直播列表 |
 | `GET /api/generate-sign` | Bearer token | 生成上游签名（调试用） |
+| `GET /api/bilibili/<room_id>/live.m3u8` | 无 | B 站直播代理 m3u8（分片重写为本服务地址） |
+| `GET /api/bilibili/<room_id>/seg/<path>` | 无 | B 站直播分片反代（注入 Referer/UA 转拉） |
+| `GET /api/bilibili/<room_id>/status` | 无 | B 站直播开播状态（实测主清单判定） |
 
 ## 测试
 
@@ -119,3 +143,4 @@ python -m unittest discover tests
 - 上游 HNTV 接口鉴权 = `timestamp` + `sign` 请求头，`sign = sha256(SECRET_KEY + timestamp)`
 - 项目内 `email/` 目录与标准库 `email` 同名冲突，新代码请勿 `import email`
 - 免费公开卫视源可达率天然较低（约 20-40%），聚合已做探测过滤与分组排序优化；央视与河南卫视官方源保持稳定
+- **B 站直播**：接口非官方可能随时改版；未开播房间 `playUrl` 也会返回地址，以实测拉取 m3u8 主清单 200 判定在播；`PUBLIC_BASE_URL` 环境变量需指向播放器可达的地址（容器部署必须覆盖为宿主机映射地址），否则列表里的 B 站频道对播放器不可用

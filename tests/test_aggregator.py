@@ -118,10 +118,11 @@ class AggregateLockTest(unittest.TestCase):
         AggregatorUtils._aggregate_lock.release()
 
     def test_load_degrades_when_aggregating(self):
-        """无缓存且后台聚合进行中（锁被占）：load 降级返回官方源列表，不阻塞"""
+        """无缓存且后台聚合进行中（锁被占）：load 降级返回官方源列表，不阻塞（正式模式）"""
         AggregatorUtils._aggregate_lock.acquire()
         try:
-            with mock.patch('core.aggregator.os.path.exists', return_value=False), \
+            with mock.patch('core.aggregator.BILIBILI_ONLY_MODE', False), \
+                 mock.patch('core.aggregator.os.path.exists', return_value=False), \
                  mock.patch.object(AggregatorUtils, 'get_hntv_only_m3u',
                                    return_value="#EXTM3U\n# 降级测试\n"):
                 content = AggregatorUtils.load_aggregated_m3u()

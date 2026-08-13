@@ -2,11 +2,12 @@
 import os
 import time
 
-from flask import Flask, abort, jsonify, request as flask_request, send_file
+from flask import Flask, Response, abort, jsonify, request as flask_request, send_file
 from flask_caching import Cache
 
 from config import GZ_FILE_PATH, SECRET_KEY
 from core.aggregator import AggregatorUtils
+from core.bilibili import BilibiliUtils
 from core.epg import XmlUtils
 from core.hntv_client import CryptoUtils, TokenUtils
 
@@ -87,6 +88,50 @@ def create_app():
         except Exception as e:
             return f'<?xml version="1.0" encoding="UTF-8"?>\n<error>{str(e)}</error>', 500, {
                 'Content-Type': 'application/xml'}
+
+    # ------------------------------------------------------------ B站直播
+
+    @app.route('/api/bilibili/<int:room_id>/live.m3u8', methods=['GET'])
+    def bilibili_live_m3u8(room_id):
+        """
+        B 站直播代理 m3u8：解析房间流地址并把分片重写为本服务代理地址
+        （播放器只认本服务，直连原始地址会因防盗链 403）
+        """
+        try:
+            # 用当前请求的 Host 生成代理基础地址（自动适配任意部署方式）
+            public_base = flask_request.host_url.rstrip('/')
+            content = BilibiliUtils.build_proxied_m3u8(room_id, public_base)
+            if content is None:
+                return '#EXTM3U\n# Error: 解析B站流地址失败（房间不存在或未开播）\n', 404, {
+                    'Content-Type': 'application/x-mpegURL'}
+            return content, 200, {'Content-Type': 'application/x-mpegURL'}
+        except Exception as e:
+            return f'#EXTM3U\n# Error: {str(e)}\n', 500, {'Content-Type': 'application/x-mpegURL'}
+
+    @app.route('/api/bilibili/<int:room_id>/seg/<path:seg_path>', methods=['GET'])
+    def bilibili_segment(room_id, seg_path):
+        """B 站直播分片反代：带 Referer/UA 向 B 站 CDN 即时转拉（HLS 滑动窗口）"""
+        status, headers, stream = BilibiliUtils.proxy_segment(room_id, seg_path)
+        if headers is None:
+            return f'Error: 分片拉取失败（HTTP {status}）', 404 if status == 404 else 500
+        return Response(stream, status=status, headers=headers)
+
+    @app.route('/api/bilibili/<int:room_id>/status', methods=['GET'])
+    def bilibili_status(room_id):
+        """
+        B 站直播房间状态（聚合/探测判断用，无鉴权）：
+        playUrl 解析出的地址不代表在播（未开播房间也会返回），
+        以实测拉取 m3u8 主清单 200 为"在播"判定
+        """
+        try:
+            live = BilibiliUtils.is_live(room_id)
+            return jsonify({
+                'room_id': room_id,
+                'live': live,
+                'playable': live,
+            })
+        except Exception as e:
+            return jsonify({'room_id': room_id, 'live': False, 'error': str(e)})
 
     @app.route('/health', methods=['GET'])
     def health_check():

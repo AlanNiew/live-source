@@ -62,9 +62,6 @@ HNTV_GROUP_NAME = "河南卫视"
 # 未识别分组时的默认组名
 DEFAULT_GROUP_NAME = "其他"
 
-# 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后），其余兜底
-GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2}
-
 # CCTV 开路频道中文标准名映射（编号 -> 中文副名）
 # 依据央视官方频道名；付费/专业频道（台球/高尔夫/风暴等）不在此表，会被过滤掉
 CCTV_NAME_MAP = {
@@ -103,6 +100,49 @@ SIGN_PARAM_PAT = re.compile(
     r'[?&](auth_key|authKey|sign|token|wsSecret|wsTime|expire|expires|txSecret|GuardEncType|accountinfo)=',
     re.I)
 
+# ---------------------------------------------------------------- B站直播
+# B 站直播间列表（默认频道：央视新闻 / 河南卫视）。
+# 新增频道格式：{"name": "频道名", "uid": UP主UID}，聚合时通过 uid 解析房间号并判断开播，
+# 开播的频道才加入 m3u 列表（地址为本服务的代理 URL，播放器只认本服务）。
+# 如何获取 uid：B 站直播间网页地址 live.bilibili.com/<房间号> 是房间号，需查 UP 主 UID——
+# 打开直播间后从地址栏的 live.bilibili.com/<房间号> 用接口 room_init?id=<房间号> 查询 uid 字段；
+# 或直接在 UP 主空间 space.bilibili.com/<UID> 地址栏取数字（空间主页即 UID）。
+BILIBILI_ROOMS = [
+    {"name": "央视新闻", "uid": 222103174},
+    {"name": "河南卫视", "uid": 2057655323},
+    {"name": "中国应急管理", "uid": 3707002299615617},
+]
+
+# B 站直播防盗链：CDN 校验 Referer 与 UA，代理转拉时必须注入
+BILIBILI_REFERER = "https://live.bilibili.com/"
+BILIBILI_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
+# 房间信息/流地址解析的磁盘缓存路径（流地址签名约 4h 过期，缓存设短 TTL 兜底）
+BILIBILI_CACHE_PATH = os.path.join(XML_DATA_DIR, 'bilibili_rooms.json')
+# 流地址解析结果的内存缓存 TTL（秒）：地址带时效签名，过期必须重新解析
+BILIBILI_PLAY_CACHE_TTL = 1800
+
+# B 站直播频道所在分组（输出顺序放最后，见 GROUP_ORDER）
+BILIBILI_GROUP_NAME = "B站直播"
+
+# 本服务对外基础地址（聚合生成 B 站代理频道 URL 时用）：
+# 播放器/盒子必须能访问该地址。容器内默认 localhost 仅开发用，
+# 生产部署需通过环境变量覆盖为宿主机映射地址（如 http://服务器IP:15002）
+PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'http://localhost:5002')
+
+# B 站分片直连模式：True 时主清单由本服务代理重写、分片指向 B 站 CDN 直连
+# （省服务器带宽，实测分片无 Referer 也可访问，防盗链只卡主清单）；
+# False 时回退全代理（分片也经本服务转发，兼容性兜底，B 站收紧分片防盗链时用）
+BILIBILI_DIRECT_SEGMENTS = os.environ.get('BILIBILI_DIRECT_SEGMENTS', 'true').lower() == 'true'
+
+# 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后）-> B站直播，其余兜底
+GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2, BILIBILI_GROUP_NAME: 3}
+
+# B 站直播测试模式：开启时聚合跳过 hntv 官方源与公开源拉取，只收集 B 站直播频道
+# （测试 B 站接入期间启用，避免每次启动拉公开源+探测 70 频道拖慢重启；
+# 正式使用设 BILIBILI_ONLY_MODE=false 恢复完整聚合）
+BILIBILI_ONLY_MODE = os.environ.get('BILIBILI_ONLY_MODE', 'true').lower() == 'true'
+
 # ---------------------------------------------------------------- 监控
 # 检测目标（monitor 跑在 api 容器内部，自检用容器内端口 5002；
 # 宿主机映射端口 15002 在容器内连不上。若未来加 nginx 反代，用环境变量覆盖）
@@ -111,7 +151,10 @@ M3U_URL = os.environ.get('MONITOR_M3U_URL', 'http://localhost:5002/api/live.m3u8
 EPG_URL = os.environ.get('MONITOR_EPG_URL', 'http://localhost:5002/api/live.xml.gz')
 
 # 频道数低于此值视为异常（正常约 70；公开源全挂只剩 hntv 时约 15，30 居中可捕获此隐蔽故障）
-MIN_CHANNEL_COUNT = 30
+# B 站测试模式（BILIBILI_ONLY_MODE=true）下列表只有 1-2 个频道，自动用低阈值 1 避免误报；
+# 仍可用环境变量 MIN_CHANNEL_COUNT 显式覆盖
+MIN_CHANNEL_COUNT = int(os.environ.get(
+    'MIN_CHANNEL_COUNT', '1' if BILIBILI_ONLY_MODE else '30'))
 
 # 检测时段（GMT+8）：仅 8:00 - 24:00 检测，0:00-7:59 不检测（不消耗流量/不打扰）
 CHECK_WINDOW_START_HOUR = 8     # 开始（含）
