@@ -84,6 +84,13 @@ class AlertUtils:
         发送失败只记日志，不影响检测循环
         """
         try:
+            # 告警开关：管理后台/DB 设置 alert_enabled=false 时整体静默（不构建、不发送）。
+            # 测试模式、本机调试时一键关告警，避免误报骚扰
+            from admin import db
+            if not db.is_alert_enabled(default=True):
+                _logger.info(f"告警已关闭（alert_enabled=false），跳过邮件: [{level}] {subject}")
+                return
+
             # 项目内的 email/ 目录与 Python 标准库 email 同名会冲突，
             # 这里用 importlib 从绝对路径加载，绕开命名冲突
             spec = importlib.util.spec_from_file_location('send_assistant', EMAIL_MODULE_PATH)
@@ -124,7 +131,17 @@ class AlertUtils:
             )
             if sent:
                 _logger.info(f"告警邮件已发送: [{level}] {subject}")
+                try:
+                    from admin import db
+                    db.record_event('INFO', 'alerts', f"告警邮件已发送: [{level}] {subject}")
+                except Exception:
+                    pass
             else:
                 _logger.warning(f"告警邮件发送失败: [{level}] {subject}")
+                try:
+                    from admin import db
+                    db.record_event('WARNING', 'alerts', f"告警邮件发送失败: [{level}] {subject}")
+                except Exception:
+                    pass
         except Exception as e:
             _logger.warning(f"发送告警邮件出错: {str(e)}")

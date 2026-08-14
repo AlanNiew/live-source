@@ -28,15 +28,21 @@ def schedule_daily_xml_update():
                 now = datetime.datetime.now(tz=GMT8)
                 tomorrow = now + datetime.timedelta(days=1)
                 next_update = tomorrow.replace(hour=2, minute=30, second=0, microsecond=0)
-                time_to_wait = (next_update - now).total_seconds()
+                time_to_wait = int((next_update - now).total_seconds())
 
                 _logger.info(f"等待 {time_to_wait} 秒后更新XML数据...")
                 time.sleep(time_to_wait)
 
                 XmlUtils.get_and_save_xml_data()
                 _logger.info("XML数据已更新")
-            except Exception as e:
-                _logger.warning(f"定时更新XML数据时出错: {str(e)}")
+                # 关键事件入库（管理页日志可查）
+                try:
+                    from admin import db
+                    db.record_event('INFO', 'scheduling', "EPG XML 每日更新完成")
+                except Exception:
+                    pass
+            except Exception:
+                _logger.exception("定时更新XML数据时出错")
 
     scheduler_thread = threading.Thread(target=update_xml_daily, daemon=True)
     scheduler_thread.start()
@@ -53,12 +59,14 @@ def schedule_aggregate_refresh():
     def public_loop():
         while True:
             try:
-                # 首次启动立即刷新一次，之后按间隔刷新
-                AggregatorUtils.get_aggregated_m3u()
-                _logger.info("聚合 m3u 已刷新（公开源）")
+                # 首次启动立即刷新一次，之后按间隔刷新；锁被占/失败返回 None，区分日志
+                if AggregatorUtils.get_aggregated_m3u():
+                    _logger.info("聚合 m3u 已刷新（公开源）")
+                else:
+                    _logger.info("公开源聚合跳过或失败（详见上方聚合日志）")
                 time.sleep(AGGREGATE_REFRESH_INTERVAL)
-            except Exception as e:
-                _logger.warning(f"定时刷新聚合 m3u 出错: {str(e)}")
+            except Exception:
+                _logger.exception("定时刷新聚合 m3u 出错")
                 time.sleep(60)  # 出错后等 1 分钟再试，避免狂跑
 
     public_thread = threading.Thread(target=public_loop, daemon=True, name='聚合-公开源')
@@ -73,11 +81,14 @@ def schedule_aggregate_refresh():
         time.sleep(10)
         while True:
             try:
-                AggregatorUtils.refresh_official_only()
-                _logger.info("官方源已刷新")
+                # 锁被占/失败返回 None，区分日志避免误导
+                if AggregatorUtils.refresh_official_only():
+                    _logger.info("官方源已刷新")
+                else:
+                    _logger.info("官方源刷新跳过或失败（详见上方聚合日志）")
                 time.sleep(OFFICIAL_REFRESH_INTERVAL)
-            except Exception as e:
-                _logger.warning(f"官方源刷新出错: {str(e)}")
+            except Exception:
+                _logger.exception("官方源刷新出错")
                 time.sleep(60)
 
     official_thread = threading.Thread(target=official_loop, daemon=True, name='聚合-官方源')

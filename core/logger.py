@@ -17,6 +17,7 @@ import datetime
 import logging
 import os
 import sys
+import time
 from logging.handlers import RotatingFileHandler
 
 from config import GMT8, LOG_FILE_PATH
@@ -28,20 +29,29 @@ _loggers = {}
 class SqliteHandler(logging.Handler):
     """把 WARNING+ 日志写入 SQLite logs 表（失败静默，不影响业务）"""
 
+    # 防递归守卫：数据层写失败 → 日志 → save_log 回写又失败 → 日志……
+    # emit 入口先占位（1 秒），失败则冷却 60 秒，切断递归链
+    _down_until = 0.0
+
     def emit(self, record):
         try:
+            now = time.time()
+            if now < SqliteHandler._down_until:
+                return
+            SqliteHandler._down_until = now + 1
             from admin import db
             # 注意：record.asctime 仅在 Formatter 调用后才存在，这里须用 record.created 自行格式化
             ts = datetime.datetime.fromtimestamp(
                 record.created, tz=GMT8).strftime('%Y-%m-%d %H:%M:%S')
-            db.save_log(
-                ts,
-                record.levelname,
-                record.name,
-                record.getMessage(),
-            )
+            message = record.getMessage()
+            # 异常日志（logger.exception）附带堆栈，便于排查
+            if record.exc_info:
+                message += '\n' + logging.Formatter().formatException(record.exc_info)
+            db.save_log(ts, record.levelname, record.name, message)
+            SqliteHandler._down_until = 0
         except Exception:
-            pass
+            # 写库失败：冷却 60 秒，避免每次失败都反复尝试
+            SqliteHandler._down_until = time.time() + 60
 
 
 def _build_logger(name):
