@@ -411,6 +411,11 @@ class AggregateIntegrationTest(unittest.TestCase):
         patcher = mock.patch.object(BilibiliUtils, 'load_custom_rooms', return_value=[])
         patcher.start()
         self.addCleanup(patcher.stop)
+        # 隔离管理库（未初始化路径 → 走 config 兜底），避免读真实 admin.db 的源配置
+        self.db_patcher = mock.patch('admin.db.ADMIN_DB_PATH',
+                                     os.path.join(tempfile.mkdtemp(), 'uninit.db'))
+        self.db_patcher.start()
+        self.addCleanup(self.db_patcher.stop)
 
     @staticmethod
     def _ch(name, url, group):
@@ -425,8 +430,11 @@ class AggregateIntegrationTest(unittest.TestCase):
 
     def test_fetch_bilibili_includes_live(self):
         """全部开播时按配置顺序加入列表（央视新闻默认在首位），URL 为本服务代理地址"""
+        rooms = [{'name': '央视新闻', 'uid': 222103174},
+                 {'name': '河南卫视', 'uid': 2057655323}]
         room_by_uid = {222103174: 8178490, 2057655323: 22861369}
-        with mock.patch.object(BilibiliUtils, 'get_room_id',
+        with mock.patch('core.aggregator.BILIBILI_ROOMS', rooms), \
+             mock.patch.object(BilibiliUtils, 'get_room_id',
                                side_effect=lambda uid: room_by_uid.get(uid)), \
              mock.patch.object(BilibiliUtils, 'is_live', return_value=True):
             channels = AggregatorUtils.fetch_bilibili_channels()
@@ -480,6 +488,13 @@ class AggregateIntegrationTest(unittest.TestCase):
 
 class TestModeTest(unittest.TestCase):
     """B 站测试模式：跳过 hntv/公开源，只聚合 B 站；降级路径不碰 hntv"""
+
+    def setUp(self):
+        # 隔离管理库（未初始化路径 → config 兜底），避免读真实 admin.db 的源/设置
+        self.db_patcher = mock.patch('admin.db.ADMIN_DB_PATH',
+                                     os.path.join(tempfile.mkdtemp(), 'uninit.db'))
+        self.db_patcher.start()
+        self.addCleanup(self.db_patcher.stop)
 
     @staticmethod
     def _ch(name, url, group):
@@ -586,10 +601,21 @@ class CustomRoomsTest(unittest.TestCase):
 class ListRoomsTest(unittest.TestCase):
     """静态+动态合并去重（room_id 唯一，静态优先）"""
 
+    def setUp(self):
+        # 隔离管理库（未初始化路径 → 走 config 兜底），避免读真实 admin.db 的源配置
+        self.db_patcher = mock.patch('admin.db.ADMIN_DB_PATH',
+                                     os.path.join(tempfile.mkdtemp(), 'uninit.db'))
+        self.db_patcher.start()
+        self.addCleanup(self.db_patcher.stop)
+
     def test_static_priority_and_dedup(self):
         """静态优先：动态与静态同 room_id 的被剔除；新房间追加"""
+        rooms = [{'name': '央视新闻', 'uid': 222103174},
+                 {'name': '河南卫视', 'uid': 2057655323},
+                 {'name': '中国应急管理', 'uid': 3707002299615617}]
         uid_map = {222103174: 8178490, 2057655323: 22861369, 3707002299615617: 1706660507}
-        with mock.patch.object(BilibiliUtils, 'get_room_id',
+        with mock.patch('core.aggregator.BILIBILI_ROOMS', rooms), \
+             mock.patch.object(BilibiliUtils, 'get_room_id',
                                side_effect=lambda uid: uid_map.get(uid)), \
              mock.patch.object(BilibiliUtils, 'load_custom_rooms', return_value=[
                  {'name': '动态重复', 'room_id': 8178490},   # 与静态重复，应被剔除
