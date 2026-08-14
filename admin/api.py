@@ -7,10 +7,13 @@
 import hmac
 import json
 import os
+import threading
+import time
 
 from flask import Blueprint, jsonify, request, session
 
-from config import ADMIN_PASSWORD, AGGREGATED_M3U_PATH, MAX_PAGE_SIZE
+from config import (ADMIN_LOGIN_LOCKOUT_SECONDS, ADMIN_LOGIN_MAX_FAILURES,
+                    ADMIN_PASSWORD, AGGREGATED_M3U_PATH, MAX_PAGE_SIZE)
 from core.aggregator import AggregatorUtils
 from core.sources import SourceUtils
 
@@ -32,6 +35,41 @@ def _admin_disabled():
     return not ADMIN_PASSWORD
 
 
+# ---------------------------------------------------------------- 登录防爆破
+
+# 进程内失败计数（GUNICORN_WORKERS=1 保证单 worker 内存态有效）。
+# 注：nginx 反代后 remote_addr 为 127.0.0.1，等价「全局锁定」——
+# 单管理员场景反而更严格（任何来源连错 N 次全锁）。nginx 层另配 limit_req 双保险。
+_login_lock = threading.Lock()
+_login_failures = {}  # remote_addr -> {'count': int, 'locked_until': float}
+
+
+def _login_throttled(remote_addr):
+    """锁定中返回剩余秒数，未锁定返回 None"""
+    now = time.time()
+    with _login_lock:
+        rec = _login_failures.get(remote_addr)
+        if rec and rec.get('locked_until', 0) > now:
+            return int(rec['locked_until'] - now) + 1
+    return None
+
+
+def _login_failed(remote_addr):
+    """登录失败：计数 +1，连续满 N 次锁定"""
+    with _login_lock:
+        rec = _login_failures.setdefault(remote_addr, {'count': 0, 'locked_until': 0})
+        rec['count'] += 1
+        if rec['count'] >= ADMIN_LOGIN_MAX_FAILURES:
+            rec['locked_until'] = time.time() + ADMIN_LOGIN_LOCKOUT_SECONDS
+            rec['count'] = 0
+
+
+def _login_ok(remote_addr):
+    """登录成功：清空该来源失败记录"""
+    with _login_lock:
+        _login_failures.pop(remote_addr, None)
+
+
 @admin_api.before_request
 def _require_admin():
     """除登录外全部端点校验 session['admin']；未启用统一 403"""
@@ -46,15 +84,22 @@ def _require_admin():
 
 @admin_api.route('/login', methods=['POST'])
 def login():
-    """POST {password} → set session['admin']（恒定时间比较防时序侧信道）"""
+    """POST {password} → set session['admin']（恒定时间比较 + 防爆破锁定）"""
     if _admin_disabled():
         return jsonify({'error': '管理功能未启用（ADMIN_PASSWORD 为空）'}), 403
+    remaining = _login_throttled(request.remote_addr)
+    if remaining is not None:
+        _audit(f"登录尝试被锁定（{request.remote_addr}）", 'WARNING')
+        return jsonify({'error': f'尝试次数过多，请 {remaining} 秒后再试'}), 429
     data = request.get_json(silent=True) or {}
     password = data.get('password') or ''
     if hmac.compare_digest(password, ADMIN_PASSWORD):
+        _login_ok(request.remote_addr)
+        session.permanent = True  # 会话按 ADMIN_SESSION_HOURS 过期
         session['admin'] = True
         _audit(f"登录成功（{request.remote_addr}）")
         return jsonify({'status': 'success'})
+    _login_failed(request.remote_addr)
     _audit(f"登录失败（{request.remote_addr}）", 'WARNING')
     return jsonify({'error': '密码错误'}), 401
 

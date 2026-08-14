@@ -1,4 +1,5 @@
 """Flask 应用工厂与全部路由（薄层，业务逻辑在 core/ 与 monitoring/）"""
+import datetime
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -6,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, Response, abort, jsonify, request as flask_request, send_file
 from flask_caching import Cache
 
-from config import GZ_FILE_PATH, SECRET_KEY
+from config import (ADMIN_SESSION_HOURS, GZ_FILE_PATH, SECRET_KEY,
+                    SESSION_COOKIE_SECURE)
 from core.aggregator import AggregatorUtils, register_refresh_callback
 from core.bilibili import BilibiliUtils
 from core.epg import XmlUtils
@@ -21,6 +23,10 @@ def create_app():
     # 会话 cookie 加固：禁 JS 读取 + SameSite=Lax（防跨站请求携带登录态）
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+    # HTTPS 反代上线后设 SESSION_COOKIE_SECURE=true（.env），Cookie 仅经 TLS 传输
+    app.config['SESSION_COOKIE_SECURE'] = SESSION_COOKIE_SECURE
+    # 管理会话有效期（登录时 session.permanent=True 生效）
+    app.permanent_session_lifetime = datetime.timedelta(hours=ADMIN_SESSION_HOURS)
 
     # 简单内存缓存（默认 10 分钟）
     app.config['CACHE_TYPE'] = 'simple'

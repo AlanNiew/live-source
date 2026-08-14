@@ -33,7 +33,19 @@ docker compose -f docker/docker-compose.prod.yml up -d --build
 - 工作进程数：`GUNICORN_WORKERS=1`（必须为 1，调度线程在 import 时启动，多 worker 会重复执行定时任务）
 - 环境变量：由 `--env-file` 从项目根目录 `.env` 注入（`API_TOKEN`/`HNTV_SECRET_KEY`/`ADMIN_PASSWORD`/`email`/`password`）
 - **数据持久化**：宿主机 `xml_data/` 挂载到容器 `/app/xml_data`（`admin.db` 管理数据、`app.log`、`aggregated.m3u` 聚合缓存等），容器重建/升级不丢管理配置与历史数据
+- **容器以非 root（uid 10001）运行**：首次部署前对宿主机持久卷授权一次：`sudo chown -R 10001:10001 xml_data`（否则写不进缓存）
 - 自动重启：容器异常退出后自动重启（`restart: unless-stopped`）
+
+## HTTPS 与公网安全（上线必做）
+
+裸 HTTP 下管理密码与会话 Cookie 可被网络嗅探，**公网暴露前请配 nginx 反代 + TLS**：
+
+1. 参考 `docker/nginx.conf.example` 配置站点（含 Let's Encrypt 证书 + `/api/admin/login` 限速 `limit_req`）
+2. 容器端口只绑本机：启动命令改 `-p 127.0.0.1:15002:5002`，对外只开 nginx 的 443
+3. `.env` 设 `SESSION_COOKIE_SECURE=true` 后重启服务（会话 Cookie 仅经 TLS）
+4. 确认 `.env` 的 `API_TOKEN` / `HNTV_SECRET_KEY` / `ADMIN_PASSWORD` 均为强随机值
+
+管理后台自带登录防爆破：连续 5 次失败锁定 5 分钟（`ADMIN_LOGIN_MAX_FAILURES` / `ADMIN_LOGIN_LOCKOUT_SECONDS` 可调），与 nginx 限速双保险。
 
 ## 访问服务
 

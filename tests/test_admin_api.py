@@ -65,6 +65,27 @@ class AdminApiTest(unittest.TestCase):
         self.client.post('/api/admin/logout')
         self.assertEqual(self.client.get('/api/admin/sources').status_code, 401)
 
+    def test_login_sets_permanent_session(self):
+        """登录成功：会话标记 permanent（按 ADMIN_SESSION_HOURS 过期）"""
+        self._login()
+        with self.client.session_transaction() as sess:
+            self.assertTrue(sess.get('_permanent'))
+
+    def test_login_lockout_after_failures(self):
+        """连续 5 次失败锁定：正确密码也 429；到期后恢复"""
+        import time as _time
+        with mock.patch.dict('admin.api._login_failures', {}, clear=True):
+            for _ in range(5):
+                self.assertEqual(self._login('wrong').status_code, 401)
+            # 锁定中：即使密码正确也拒绝
+            resp = self.client.post('/api/admin/login', json={'password': 'testpass'})
+            self.assertEqual(resp.status_code, 429)
+            # 锁定期过后恢复可登录
+            future = _time.time() + 301
+            with mock.patch('admin.api.time.time', return_value=future):
+                resp = self.client.post('/api/admin/login', json={'password': 'testpass'})
+            self.assertEqual(resp.status_code, 200)
+
     def test_disabled_when_password_empty(self):
         """ADMIN_PASSWORD 为空：登录与全部端点 403（安全默认）"""
         with mock.patch('admin.api.ADMIN_PASSWORD', ''):

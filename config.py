@@ -153,6 +153,14 @@ BILIBILI_ONLY_MODE = os.environ.get('BILIBILI_ONLY_MODE', 'true').lower() == 'tr
 # ---------------------------------------------------------------- 管理后台
 # 管理界面/管理 API 的登录密码（session 鉴权；留空 = 禁用管理功能，安全默认）
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '').strip()
+# 管理会话安全（上线加固）：
+# - SESSION_COOKIE_SECURE：nginx 反代 + HTTPS 后设为 true，会话 Cookie 仅经 TLS 传输
+# - ADMIN_SESSION_HOURS：登录会话有效期（小时，登录时 session.permanent=True 生效）
+# - 登录防爆破：连续失败 ADMIN_LOGIN_MAX_FAILURES 次锁定 ADMIN_LOGIN_LOCKOUT_SECONDS 秒
+SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
+ADMIN_SESSION_HOURS = int(os.environ.get('ADMIN_SESSION_HOURS', '12'))
+ADMIN_LOGIN_MAX_FAILURES = int(os.environ.get('ADMIN_LOGIN_MAX_FAILURES', '5'))
+ADMIN_LOGIN_LOCKOUT_SECONDS = int(os.environ.get('ADMIN_LOGIN_LOCKOUT_SECONDS', '300'))
 # 管理数据 SQLite 单文件（源配置/频道覆盖/监控历史/日志）
 ADMIN_DB_PATH = os.environ.get('ADMIN_DB_PATH', os.path.join(XML_DATA_DIR, 'admin.db'))
 # 滚动日志文件路径（logging 双 handler：文件 + SQLite logs 表）

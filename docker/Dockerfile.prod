@@ -22,6 +22,11 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 # 复制项目源代码
 COPY . .
 
+# 安全基线：以非 root 用户运行（宿主机 xml_data 持久卷需先 chown -R 10001:10001 一次，
+# 见 docker/README.md「常见问题」）
+RUN useradd --create-home --uid 10001 appuser
+USER appuser
+
 # 暴露应用端口
 EXPOSE 5002
 
