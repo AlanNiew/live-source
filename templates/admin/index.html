@@ -1,0 +1,169 @@
+{% extends "admin/base.html" %}
+{% block title %}仪表盘{% endblock %}
+{% block content %}
+<div id="alertBox"></div>
+
+<div class="row g-3 mb-4" id="cardsRow">
+  <div class="col-6 col-lg-3">
+    <div class="card text-bg-light shadow-sm h-100">
+      <div class="card-body">
+        <div class="text-secondary small">常规健康（health/m3u/epg）</div>
+        <div class="fs-4 fw-bold" id="cardHealth">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card text-bg-light shadow-sm h-100">
+      <div class="card-body">
+        <div class="text-secondary small">流探测（30min 一轮）</div>
+        <div class="fs-4 fw-bold" id="cardStream">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card text-bg-light shadow-sm h-100">
+      <div class="card-body">
+        <div class="text-secondary small">最近检测频道数</div>
+        <div class="fs-4 fw-bold" id="cardChannels">…</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card text-bg-light shadow-sm h-100">
+      <div class="card-body">
+        <div class="text-secondary small">当前频道总数</div>
+        <div class="fs-4 fw-bold" id="cardTotal">…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-4">
+  <div class="card-header">频道数趋势（最近 24 轮常规检测）</div>
+  <div class="card-body">
+    <canvas id="trendChart" height="80"></canvas>
+    <div class="text-center text-secondary small" id="trendEmpty" hidden>暂无检测数据</div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card shadow-sm">
+      <div class="card-header">最近健康时间线（24 轮）</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead><tr><th>时间</th><th>状态</th><th>频道数</th><th>EPG(KB)</th></tr></thead>
+            <tbody id="historyBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex justify-content-between">
+        <span>最近日志</span>
+        <a class="small" href="/admin/logs">查看全部 →</a>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead><tr><th>时间</th><th>级别</th><th>模块</th><th>内容</th></tr></thead>
+            <tbody id="logsBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+const levelBadge = l => ({
+  'ERROR': '<span class="badge text-bg-danger">ERROR</span>',
+  'WARNING': '<span class="badge text-bg-warning">WARNING</span>',
+}[l] || `<span class="badge text-bg-secondary">${esc(l)}</span>`);
+
+/* 趋势图：最近 24 轮检测的频道数（CDN 不可用时静默降级为无图） */
+let trendChart = null;
+function renderTrend(recent) {
+  const canvas = document.getElementById('trendChart');
+  const empty = document.getElementById('trendEmpty');
+  if (!recent.length || typeof Chart === 'undefined') {
+    canvas.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+  canvas.hidden = false;
+  empty.hidden = true;
+  const labels = recent.map(r => String(r.ts).slice(11, 16));
+  const values = recent.map(r => r.channel_count);
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '频道数',
+        data: values,
+        borderColor: '#0d6efd',
+        backgroundColor: 'rgba(13,110,253,0.08)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {legend: {display: false}},
+      scales: {y: {beginAtZero: true, ticks: {precision: 0}}},
+    },
+  });
+}
+
+async function load() {
+  try {
+    const [summary, channels, logs] = await Promise.all([
+      api('/api/admin/monitor/summary'),
+      api('/api/admin/channels?page_size=1'),
+      api('/api/admin/logs?page_size=8'),
+    ]);
+    const ok = s => s === 'OK';
+    const badge = (b, label) => `<span class="badge text-bg-${b ? 'success' : 'danger'}">${label}</span>`;
+    document.getElementById('cardHealth').innerHTML =
+      badge(ok(summary.health.status), summary.health.status)
+      + ` <span class="fs-6 text-secondary">连续失败 ${summary.health.fail_count}</span>`;
+    document.getElementById('cardStream').innerHTML =
+      badge(ok(summary.stream.status), summary.stream.status)
+      + ` <span class="fs-6 text-secondary">连续失败 ${summary.stream.fail_count}</span>`;
+    document.getElementById('cardChannels').textContent =
+      summary.last_check ? summary.last_check.channel_count : '—';
+    document.getElementById('cardTotal').textContent = channels.total;
+    renderTrend(summary.recent);
+
+    const hb = document.getElementById('historyBody');
+    hb.innerHTML = summary.recent.length ? summary.recent.map(r => `
+      <tr>
+        <td class="text-nowrap">${esc(r.ts)}</td>
+        <td>${badge(r.overall === 1, r.overall === 1 ? 'OK' : 'FAIL')}</td>
+        <td>${esc(r.channel_count)}</td>
+        <td>${esc(r.epg_size)}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="text-center text-secondary">暂无检测记录</td></tr>';
+
+    const lb = document.getElementById('logsBody');
+    lb.innerHTML = logs.items.length ? logs.items.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td>${levelBadge(r.level)}</td>
+        <td>${esc(r.module)}</td>
+        <td class="text-truncate" style="max-width: 260px" title="${esc(r.message)}">${esc(r.message)}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="text-center text-secondary">暂无日志</td></tr>';
+  } catch (err) {
+    toast(err.message, false);
+  }
+}
+load();
+</script>
+{% endblock %}

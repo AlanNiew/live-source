@@ -1,0 +1,126 @@
+{% extends "admin/base.html" %}
+{% block title %}频道管理{% endblock %}
+{% block content %}
+<div id="alertBox"></div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-2">
+    <form class="row g-2 align-items-center" id="filterForm">
+      <div class="col-md-4">
+        <input class="form-control form-control-sm" id="qInput" placeholder="搜索频道名…">
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" id="sortSelect">
+          <option value="">默认顺序（河南卫视→央视→卫视→B站）</option>
+          <option value="name">按频道名</option>
+          <option value="group">按分组</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" id="orderSelect">
+          <option value="asc">升序</option>
+          <option value="desc">降序</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-sm btn-primary" type="submit">查询</button>
+      </div>
+    </form>
+    <div class="form-text">覆盖说明：禁用 = 从播放列表移除（可随时恢复）；改名/改分组只影响输出，key 仍为原频道名。</div>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 align-middle">
+        <thead><tr>
+          <th>频道</th><th>key</th><th>分组</th><th>流地址</th><th>覆盖状态</th><th>在列表中</th><th class="text-end">操作</th>
+        </tr></thead>
+        <tbody id="channelsBody"><tr><td colspan="7" class="text-center text-secondary">加载中…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="p-2" id="pagerBox"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let page = 1;
+const pageSize = 50;
+
+function overrideBadge(ov) {
+  if (!ov) return '<span class="badge text-bg-secondary">默认</span>';
+  const parts = [];
+  if (ov.enabled === 0) parts.push('<span class="badge text-bg-danger">禁用</span>');
+  if (ov.display_name) parts.push(`<span class="badge text-bg-primary">改名:${esc(ov.display_name)}</span>`);
+  if (ov.group_title) parts.push(`<span class="badge text-bg-info">分组:${esc(ov.group_title)}</span>`);
+  return parts.join(' ') || '<span class="badge text-bg-secondary">默认</span>';
+}
+
+async function load() {
+  try {
+    const q = encodeURIComponent(document.getElementById('qInput').value.trim());
+    const sort = document.getElementById('sortSelect').value;
+    const order = document.getElementById('orderSelect').value;
+    const data = await api(`/api/admin/channels?page=${page}&page_size=${pageSize}&q=${q}&sort=${sort}&order=${order}`);
+    const tb = document.getElementById('channelsBody');
+    tb.innerHTML = data.items.length ? data.items.map(r => `
+      <tr class="${r.enabled ? '' : 'table-secondary'}">
+        <td>${esc(r.name)}</td>
+        <td class="text-secondary small">${esc(r.key)}</td>
+        <td>${esc(r.group)}</td>
+        <td class="text-break small text-secondary">${esc(r.url || '—')}</td>
+        <td>${overrideBadge(r.override)}</td>
+        <td>${r.enabled ? '<span class="badge text-bg-success">是</span>'
+                       : '<span class="badge text-bg-danger">否</span>'}</td>
+        <td class="text-end text-nowrap">
+          <button class="btn btn-sm ${r.enabled ? 'btn-outline-danger' : 'btn-outline-success'}"
+                  data-act="toggle" data-key="${esc(r.key)}">${r.enabled ? '禁用' : '启用'}</button>
+          <button class="btn btn-sm btn-outline-primary" data-act="group" data-key="${esc(r.key)}"
+                  data-group="${esc(r.override?.group_title || '')}">改分组</button>
+          <button class="btn btn-sm btn-outline-primary" data-act="name" data-key="${esc(r.key)}"
+                  data-name="${esc(r.override?.display_name || '')}">改名</button>
+          ${r.override ? `<button class="btn btn-sm btn-outline-secondary" data-act="clear" data-key="${esc(r.key)}">恢复默认</button>` : ''}
+        </td>
+      </tr>`).join('') : '<tr><td colspan="7" class="text-center text-secondary">暂无频道</td></tr>';
+
+    const put = async (key, body) => {
+      try { await api(`/api/admin/channels/${encodeURIComponent(key)}`, 'PUT', body); toast('已保存，正在后台刷新播放列表'); load(); }
+      catch (err) { toast(err.message, false); }
+    };
+    tb.querySelectorAll('[data-act=toggle]').forEach(b => b.addEventListener('click', () =>
+      put(b.dataset.key, {enabled: !(b.textContent.trim() === '禁用')})));
+    tb.querySelectorAll('[data-act=group]').forEach(b => b.addEventListener('click', () => {
+      const v = prompt('新分组名（留空清除覆盖）：', b.dataset.group);
+      if (v === null) return;
+      put(b.dataset.key, {group_title: v});
+    }));
+    tb.querySelectorAll('[data-act=name]').forEach(b => b.addEventListener('click', () => {
+      const v = prompt('新显示名（留空清除覆盖）：', b.dataset.name);
+      if (v === null) return;
+      put(b.dataset.key, {display_name: v});
+    }));
+    tb.querySelectorAll('[data-act=clear]').forEach(b => b.addEventListener('click', async () => {
+      if (!confirm('删除该频道的全部覆盖配置，恢复默认？')) return;
+      try {
+        await api(`/api/admin/channels/${encodeURIComponent(b.dataset.key)}`, 'DELETE');
+        toast('已恢复默认');
+        load();
+      } catch (err) { toast(err.message, false); }
+    }));
+    renderPager(document.getElementById('pagerBox'), data, p => { page = p; load(); });
+  } catch (err) {
+    toast(err.message, false);
+  }
+}
+
+document.getElementById('filterForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  page = 1;
+  load();
+});
+
+load();
+</script>
+{% endblock %}

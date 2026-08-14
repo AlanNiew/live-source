@@ -1,0 +1,130 @@
+{% extends "admin/base.html" %}
+{% block title %}监控{% endblock %}
+{% block content %}
+<div id="alertBox"></div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card text-bg-light shadow-sm h-100">
+      <div class="card-body">
+        <div class="text-secondary small">常规健康状态</div>
+        <div class="fs-4 fw-bold" id="sumHealth">…</div>
+        <div class="small text-secondary" id="sumLastCheck">最近检测：—</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card text-bg-light shadow-sm h-100">
+      <div class="card-body">
+        <div class="text-secondary small">流探测状态</div>
+        <div class="fs-4 fw-bold" id="sumStream">…</div>
+        <div class="small text-secondary" id="sumStreamFail">—</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card text-bg-light shadow-sm h-100">
+      <div class="card-body">
+        <div class="text-secondary small">最近一轮（频道数 / EPG KB）</div>
+        <div class="fs-4 fw-bold" id="sumChannels">—</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card shadow-sm">
+      <div class="card-header">健康检测历史（新→旧）</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead><tr><th>时间</th><th>health</th><th>m3u</th><th>epg</th><th>频道数</th><th>结果</th></tr></thead>
+            <tbody id="historyBody"><tr><td colspan="6" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="p-2" id="historyPager"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card shadow-sm">
+      <div class="card-header d-flex gap-2 align-items-center flex-wrap">
+        <span>流探测明细</span>
+        <div class="form-check form-switch mb-0 ms-auto">
+          <input class="form-check-input" type="checkbox" id="onlyBad">
+          <label class="form-check-label small" for="onlyBad">仅看不可达</label>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height: 480px; overflow-y: auto;">
+          <table class="table table-sm table-hover mb-0">
+            <thead><tr><th>时间</th><th>分组</th><th>频道</th><th>轮次</th><th>结果</th></tr></thead>
+            <tbody id="streamsBody"><tr><td colspan="5" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="p-2" id="streamsPager"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let historyPage = 1, streamsPage = 1;
+const pageSize = 20;
+
+async function loadSummary() {
+  try {
+    const s = await api('/api/admin/monitor/summary');
+    const badge = (ok, label) => `<span class="badge text-bg-${ok ? 'success' : 'danger'}">${label}</span>`;
+    document.getElementById('sumHealth').innerHTML = badge(s.health.status === 'OK', s.health.status);
+    document.getElementById('sumStream').innerHTML = badge(s.stream.status === 'OK', s.stream.status);
+    document.getElementById('sumStreamFail').textContent = `连续失败 ${s.stream.fail_count} 次`;
+    if (s.last_check) {
+      document.getElementById('sumLastCheck').textContent = `最近检测：${s.last_check.ts}`;
+      document.getElementById('sumChannels').textContent = `${s.last_check.channel_count} / ${s.last_check.epg_size}`;
+    }
+  } catch (err) { toast(err.message, false); }
+}
+
+async function loadHistory() {
+  try {
+    const data = await api(`/api/admin/monitor/history?page=${historyPage}&page_size=${pageSize}`);
+    const tb = document.getElementById('historyBody');
+    tb.innerHTML = data.items.length ? data.items.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td>${r.health_ok ? '✓' : '✗'}</td>
+        <td>${r.m3u_ok ? '✓' : '✗'}</td>
+        <td>${r.epg_ok ? '✓' : '✗'}</td>
+        <td>${esc(r.channel_count)}</td>
+        <td><span class="badge text-bg-${r.overall ? 'success' : 'danger'}">${r.overall ? 'OK' : 'FAIL'}</span></td>
+      </tr>`).join('') : '<tr><td colspan="6" class="text-center text-secondary">暂无历史</td></tr>';
+    renderPager(document.getElementById('historyPager'), data, p => { historyPage = p; loadHistory(); });
+  } catch (err) { toast(err.message, false); }
+}
+
+async function loadStreams() {
+  try {
+    const bad = document.getElementById('onlyBad').checked ? '&unreachable=1' : '';
+    const data = await api(`/api/admin/monitor/streams?page=${streamsPage}&page_size=${pageSize}${bad}`);
+    const tb = document.getElementById('streamsBody');
+    tb.innerHTML = data.items.length ? data.items.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td>${esc(r.group_name)}</td>
+        <td>${esc(r.channel_name)}</td>
+        <td class="text-secondary small">${esc(r.round_id)}</td>
+        <td><span class="badge text-bg-${r.ok ? 'success' : 'danger'}">${r.ok ? '可达' : '不可达'}</span></td>
+      </tr>`).join('') : '<tr><td colspan="5" class="text-center text-secondary">暂无探测记录</td></tr>';
+    renderPager(document.getElementById('streamsPager'), data, p => { streamsPage = p; loadStreams(); });
+  } catch (err) { toast(err.message, false); }
+}
+
+document.getElementById('onlyBad').addEventListener('change', () => { streamsPage = 1; loadStreams(); });
+loadSummary();
+loadHistory();
+loadStreams();
+</script>
+{% endblock %}

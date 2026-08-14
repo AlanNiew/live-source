@@ -1,0 +1,79 @@
+{% extends "admin/base.html" %}
+{% block title %}日志{% endblock %}
+{% block content %}
+<div id="alertBox"></div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body py-2">
+    <form class="row g-2 align-items-center" id="filterForm">
+      <div class="col-auto">
+        <select class="form-select form-select-sm" id="levelSelect">
+          <option value="">全部级别</option>
+          <option value="ERROR">ERROR</option>
+          <option value="WARNING">WARNING</option>
+          <option value="INFO">INFO</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <input class="form-control form-control-sm" id="qInput" placeholder="关键词（内容/模块）…">
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-sm btn-primary" type="submit">查询</button>
+      </div>
+    </form>
+    <div class="form-text">普通日志仅 WARNING+ 入库（防膨胀）；INFO 级为关键事件（服务启停 / 聚合完成 / 告警结果 / 管理操作审计）。保留最近 7 天。</div>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0">
+        <thead><tr><th>时间</th><th>级别</th><th>模块</th><th>内容</th></tr></thead>
+        <tbody id="logsBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="p-2" id="pagerBox"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let page = 1;
+const pageSize = 50;
+
+function levelBadge(l) {
+  return {'ERROR': '<span class="badge text-bg-danger">ERROR</span>',
+          'WARNING': '<span class="badge text-bg-warning">WARNING</span>',
+          'INFO': '<span class="badge text-bg-secondary">INFO</span>'}[l]
+      || `<span class="badge text-bg-secondary">${esc(l)}</span>`;
+}
+
+async function load() {
+  try {
+    const level = document.getElementById('levelSelect').value;
+    const q = encodeURIComponent(document.getElementById('qInput').value.trim());
+    const data = await api(`/api/admin/logs?page=${page}&page_size=${pageSize}&level=${level}&q=${q}`);
+    const tb = document.getElementById('logsBody');
+    tb.innerHTML = data.items.length ? data.items.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td>${levelBadge(r.level)}</td>
+        <td>${esc(r.module)}</td>
+        <td class="text-break">${esc(r.message)}</td>
+      </tr>`).join('') : '<tr><td colspan="4" class="text-center text-secondary">暂无日志</td></tr>';
+    renderPager(document.getElementById('pagerBox'), data, p => { page = p; load(); });
+  } catch (err) {
+    toast(err.message, false);
+  }
+}
+
+document.getElementById('filterForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  page = 1;
+  load();
+});
+
+load();
+</script>
+{% endblock %}

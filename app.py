@@ -7,7 +7,7 @@ from flask import Flask, Response, abort, jsonify, request as flask_request, sen
 from flask_caching import Cache
 
 from config import GZ_FILE_PATH, SECRET_KEY
-from core.aggregator import AggregatorUtils
+from core.aggregator import AggregatorUtils, register_refresh_callback
 from core.bilibili import BilibiliUtils
 from core.epg import XmlUtils
 from core.hntv_client import CryptoUtils, TokenUtils
@@ -16,11 +16,31 @@ from core.hntv_client import CryptoUtils, TokenUtils
 def create_app():
     """创建 Flask 应用（含缓存配置与路由）"""
     app = Flask(__name__)
+    # session 签名密钥（管理后台登录态）
+    app.secret_key = SECRET_KEY
+    # 会话 cookie 加固：禁 JS 读取 + SameSite=Lax（防跨站请求携带登录态）
+    app.config['SESSION_COOKIE_HTTPONLY'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
     # 简单内存缓存（默认 10 分钟）
     app.config['CACHE_TYPE'] = 'simple'
     app.config['CACHE_DEFAULT_TIMEOUT'] = 600
     cache = Cache(app)
+
+    # 管理 API（session 鉴权）；注入缓存实例供配置变更后清播放列表缓存
+    from admin.api import admin_api as admin_api_bp
+    admin_api_bp.cache = cache
+    app.register_blueprint(admin_api_bp, url_prefix='/api/admin')
+
+    # 每次聚合落盘后清播放列表缓存（定时/手动刷新统一），
+    # 避免配置变更后聚合完成前被请求重新缓存旧内容、再挡 10 分钟
+    if not getattr(admin_api_bp, '_refresh_cb_registered', False):
+        register_refresh_callback(lambda: cache.delete('transList2M3U'))
+        admin_api_bp._refresh_cb_registered = True
+
+    # 管理后台页面（/admin/*，与 API 共用 session）
+    from admin.web import admin_web as admin_web_bp
+    app.register_blueprint(admin_web_bp, url_prefix='/admin')
 
     @cache.cached(timeout=600, key_prefix='transList2M3U')
     def trans_list_to_m3u_cached():
