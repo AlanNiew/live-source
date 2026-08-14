@@ -109,8 +109,6 @@ SIGN_PARAM_PAT = re.compile(
 # 更推荐用运行时 API 动态添加（POST /api/bilibili/rooms），无需改配置重启。
 BILIBILI_ROOMS = [
     {"name": "央视新闻", "uid": 222103174},
-    {"name": "河南卫视", "uid": 2057655323},
-    {"name": "中国应急管理", "uid": 3707002299615617},
 ]
 
 # B 站直播防盗链：CDN 校验 Referer 与 UA，代理转拉时必须注入
@@ -161,8 +159,13 @@ ADMIN_DB_PATH = os.environ.get('ADMIN_DB_PATH', os.path.join(XML_DATA_DIR, 'admi
 LOG_FILE_PATH = os.environ.get('LOG_FILE_PATH', os.path.join(XML_DATA_DIR, 'app.log'))
 # 历史数据保留上限（清理策略，防 DB 无限膨胀）
 MONITOR_HISTORY_KEEP = int(os.environ.get('MONITOR_HISTORY_KEEP', '500'))     # 常规检测轮数
-STREAM_HISTORY_KEEP = int(os.environ.get('STREAM_HISTORY_KEEP', '2000'))      # 流探测条数
+# 流探测条数：30 分钟一轮 × 约 70 频道 ≈ 3400 条/天，20000 约保留 6 天
+STREAM_HISTORY_KEEP = int(os.environ.get('STREAM_HISTORY_KEEP', '20000'))
 LOG_KEEP_DAYS = int(os.environ.get('LOG_KEEP_DAYS', '7'))                     # 日志保留天数
+# 管理 API 列表分页：每页条数上限（超出截断）
+MAX_PAGE_SIZE = 200
+# 频道覆盖层内存缓存 TTL（秒）：聚合/频道列表查询覆盖配置的缓存时长
+CHANNEL_OVERRIDE_CACHE_TTL = 60
 
 # ---------------------------------------------------------------- 监控
 # 检测目标（monitor 跑在 api 容器内部，自检用容器内端口 5002；

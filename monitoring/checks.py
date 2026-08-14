@@ -31,6 +31,27 @@ class CheckUtils:
     # ------------------------------------------------------------ 检测项
 
     @staticmethod
+    def _min_channel_count():
+        """监控频道数阈值：DB 设置优先；未设置时沿用 config 自动联动（测试模式低阈值 1）"""
+        from admin import db
+        value = db.get_effective_int('min_channel_count', None)
+        if value is not None:
+            return value
+        from core.aggregator import AggregatorUtils
+        if AggregatorUtils.is_bilibili_only_mode():
+            return 1
+        return MIN_CHANNEL_COUNT
+
+    @staticmethod
+    def _group_health_ratios():
+        """分组健康率阈值：DB 设置（JSON）优先，config 兜底"""
+        from admin import db
+        ratios = db.get_effective_json('group_health_ratios', None)
+        if ratios:
+            return ratios
+        return GROUP_HEALTH_RATIOS
+
+    @staticmethod
     def check_health():
         """
         检测服务存活：/health 返回 200 且 status=healthy
@@ -49,7 +70,7 @@ class CheckUtils:
     @staticmethod
     def check_m3u():
         """
-        检测核心功能：/api/live.m3u8 返回 200 且频道数 ≥ MIN_CHANNEL_COUNT
+        检测核心功能：/api/live.m3u8 返回 200 且频道数 ≥ 阈值（DB 设置优先，config 兜底）
         :return: (正常bool, 频道数int)
         """
         try:
@@ -57,7 +78,7 @@ class CheckUtils:
             if r.status_code != 200:
                 return False, 0
             count = r.text.count('#EXTINF')
-            return count >= MIN_CHANNEL_COUNT, count
+            return count >= CheckUtils._min_channel_count(), count
         except Exception as e:
             _logger.warning(f"m3u 检测请求失败: {str(e)}")
             return False, 0
@@ -123,6 +144,7 @@ class CheckUtils:
         health_ok = CheckUtils.check_health()
         m3u_ok, channel_count = CheckUtils.check_m3u()
         epg_ok, epg_size = CheckUtils.check_epg()
+        min_count = CheckUtils._min_channel_count()
         current = "OK" if (health_ok and m3u_ok and epg_ok) else "FAIL"
 
         if current == "OK":
@@ -134,7 +156,7 @@ class CheckUtils:
             if not health_ok:
                 reason.append("/health 不可达")
             if not m3u_ok:
-                reason.append(f"频道数 {channel_count} < {MIN_CHANNEL_COUNT}")
+                reason.append(f"频道数 {channel_count} < {min_count}")
             if not epg_ok:
                 reason.append("节目单不可用")
             _logger.info(f"健康检测异常（连续第 {CheckUtils._fail_count} 次）：{', '.join(reason)}")
@@ -151,7 +173,7 @@ class CheckUtils:
                     "name": "直播源 (频道数)",
                     "status": m3u_ok,
                     "detail": f"{channel_count} 个频道" if m3u_ok
-                              else f"{channel_count} 个，低于阈值 {MIN_CHANNEL_COUNT}",
+                              else f"{channel_count} 个，低于阈值 {min_count}",
                 },
                 {
                     "name": "节目单 (EPG)",
@@ -214,15 +236,16 @@ class CheckUtils:
             # 并发探测所有流（严格判定：仅 200/206 可达，与聚合过滤的宽松口径区分）
             with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
                 results = list(executor.map(probe_stream, [u for u, _, _ in items]))
-            # 落库：本轮流探测明细（每频道一条，失败静默不影响检测）
+            # 落库：本轮流探测明细（每频道一条，整轮批量写入，失败静默不影响检测）
             try:
                 from admin import db
                 now = datetime.datetime.now(tz=GMT8)
                 round_id = now.strftime('%Y%m%d%H%M')
-                for (url, group, name), ok in zip(items, results):
-                    db.save_stream_history(
-                        now.strftime('%Y-%m-%d %H:%M:%S'),
-                        group, name, url, ok, round_id)
+                rows = [
+                    (now.strftime('%Y-%m-%d %H:%M:%S'), group, name, url, ok, round_id)
+                    for (url, group, name), ok in zip(items, results)
+                ]
+                db.save_stream_history_batch(rows)
             except Exception:
                 pass
             # 按分组统计
@@ -238,7 +261,7 @@ class CheckUtils:
             all_ok = True
             for group, (ok_count, total) in groups.items():
                 ratio = ok_count / total
-                threshold = GROUP_HEALTH_RATIOS.get(group, DEFAULT_GROUP_RATIO)
+                threshold = CheckUtils._group_health_ratios().get(group, DEFAULT_GROUP_RATIO)
                 group_ok = ratio >= threshold
                 if group in ALERT_GROUPS and not group_ok:
                     all_ok = False

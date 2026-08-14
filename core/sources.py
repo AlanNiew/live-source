@@ -32,10 +32,28 @@ class SourceUtils:
             return ""
 
     @staticmethod
+    def get_public_source_urls():
+        """
+        聚合用公开源 url 列表：管理 DB（admin/sources 表 type=public）优先，
+        空表/未初始化/异常一律回退 config.PUBLIC_M3U_SOURCES 种子值
+        （向后兼容：不配管理库时行为与旧版完全一致）
+        :return: url 列表
+        """
+        try:
+            from admin import db
+            if db.db_ready():
+                urls = db.get_enabled_public_urls()
+                if urls:
+                    return urls
+        except Exception:
+            pass
+        return list(PUBLIC_M3U_SOURCES)
+
+    @staticmethod
     def fetch_all_public_channels():
         """拉取全部公开源并解析为频道列表"""
         channels = []
-        for url in PUBLIC_M3U_SOURCES:
+        for url in SourceUtils.get_public_source_urls():
             m3u_text = SourceUtils.fetch_public_m3u(url)
             channels.extend(SourceUtils.parse_m3u_channels(m3u_text))
         return channels

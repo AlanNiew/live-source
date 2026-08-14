@@ -2,11 +2,12 @@
 import json
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from config import (AGGREGATED_M3U_PATH, BILIBILI_GROUP_NAME, BILIBILI_ONLY_MODE,
-                    BILIBILI_ROOMS, FILTER_UNREACHABLE, GROUP_ORDER,
-                    HNTV_GROUP_NAME, PUBLIC_BASE_URL,
+                    BILIBILI_ROOMS, CHANNEL_OVERRIDE_CACHE_TTL, FILTER_UNREACHABLE,
+                    GROUP_ORDER, HNTV_GROUP_NAME, PUBLIC_BASE_URL,
                     PUBLIC_CHANNELS_CACHE_PATH, STREAM_CHECK_CONCURRENCY,
                     STREAM_FAILURES_PATH, STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE)
 from core.atomic_io import atomic_write_text
@@ -29,6 +30,43 @@ def _log(msg):
 # worker 阻塞获取 _aggregate_lock 保证与定时任务不并发。
 _refresh_pending = False
 _refresh_flag_lock = threading.Lock()
+
+# 聚合完成回调（app 层注册：刷新完成后清播放列表缓存）。
+# 定时/手动刷新统一走这里，避免配置变更后旧缓存再被请求缓存 10 分钟
+_refresh_callbacks = []
+
+
+def register_refresh_callback(cb):
+    """注册聚合完成回调（create_app 注册 flask 缓存清理；回调异常不阻断聚合）"""
+    if cb not in _refresh_callbacks:
+        _refresh_callbacks.append(cb)
+
+
+def _fire_refresh_callbacks():
+    """聚合结果已落盘后触发全部回调（尽力而为，异常吞掉）"""
+    for cb in list(_refresh_callbacks):
+        try:
+            cb()
+        except Exception:
+            pass
+
+# 频道覆盖层内存缓存（管理后台配置的禁用/改分组/改名）：
+# {channel_key: {enabled, display_name, group_title}}，TTL 见 CHANNEL_OVERRIDE_CACHE_TTL。
+# 聚合与频道列表共享；查询失败回退空 dict（不阻断聚合）
+_override_cache = {"expire": 0.0, "data": {}}
+
+
+def _get_channel_overrides():
+    """频道覆盖配置 {channel_key: row}，带 TTL 内存缓存（未初始化库直接回退空）"""
+    now = time.time()
+    if now >= _override_cache["expire"]:
+        try:
+            from admin import db
+            _override_cache["data"] = db.get_channel_overrides() if db.db_ready() else {}
+        except Exception:
+            _override_cache["data"] = {}
+        _override_cache["expire"] = now + CHANNEL_OVERRIDE_CACHE_TTL
+    return _override_cache["data"]
 
 
 class AggregatorUtils:
@@ -80,6 +118,47 @@ class AggregatorUtils:
         return hntv_channels
 
     @staticmethod
+    def is_bilibili_only_mode():
+        """
+        B 站测试模式开关（聚合时实时判定）：
+        - 管理 DB settings 表有 bilibili_only_mode 值 → 以 DB 为准（管理后台可切换）
+        - 未设置/库未初始化 → 回退 env BILIBILI_ONLY_MODE
+        调度线程布局在启动时按 env 定死，本开关只影响聚合轮次内容
+        """
+        from admin import db
+        return db.get_effective_bool('bilibili_only_mode', BILIBILI_ONLY_MODE)
+
+    @staticmethod
+    def _stream_fail_limit():
+        """聚合探测连续失败轮数：DB 设置优先，config 兜底"""
+        from admin import db
+        return db.get_effective_int('stream_fail_limit', STREAM_FAIL_LIMIT)
+
+    @staticmethod
+    def _public_base_url():
+        """本服务对外基础地址（B 站频道 URL 生成用）：DB 设置优先，config/env 兜底。
+        可在管理后台「设置」页改，无需重启"""
+        from admin import db
+        return db.get_effective_str('public_base_url', PUBLIC_BASE_URL)
+
+    @staticmethod
+    def _get_bilibili_static_rooms():
+        """
+        B 站静态房间配置来源：管理 DB（sources 表 type=bilibili）优先，
+        空表/未初始化/异常回退 config.BILIBILI_ROOMS 种子值（行为与旧版一致）
+        :return: [{name, room_id} 或 {name, uid}] 列表
+        """
+        try:
+            from admin import db
+            if db.db_ready():
+                rooms = db.get_enabled_bilibili_rooms()
+                if rooms:
+                    return rooms
+        except Exception:
+            pass
+        return BILIBILI_ROOMS
+
+    @staticmethod
     def list_bilibili_rooms():
         """
         列出全部 B 站频道（静态配置 + 动态列表合并）：
@@ -90,11 +169,14 @@ class AggregatorUtils:
         result = []
         seen = set()
 
-        for item in BILIBILI_ROOMS:
-            room_id = item.get("room_id") or BilibiliUtils.get_room_id(item.get("uid"))
-            if room_id is not None and room_id not in seen:
-                seen.add(room_id)
-                result.append({"name": item["name"], "room_id": room_id, "source": "static"})
+        for item in AggregatorUtils._get_bilibili_static_rooms():
+            room_id = item.get("room_id")
+            if room_id is None and item.get("uid") is not None:
+                room_id = BilibiliUtils.get_room_id(item["uid"])
+            if room_id is None or room_id in seen:
+                continue
+            seen.add(room_id)
+            result.append({"name": item["name"], "room_id": room_id, "source": "static"})
 
         for item in BilibiliUtils.load_custom_rooms():
             room_id = item.get("room_id")
@@ -125,7 +207,7 @@ class AggregatorUtils:
                 continue
             channels.append({
                 "name": name,
-                "url": f"{PUBLIC_BASE_URL.rstrip('/')}/api/bilibili/{room_id}/live.m3u8",
+                "url": f"{AggregatorUtils._public_base_url().rstrip('/')}/api/bilibili/{room_id}/live.m3u8",
                 "group_title": BILIBILI_GROUP_NAME,
                 "tvg_name": name,
             })
@@ -191,6 +273,21 @@ class AggregatorUtils:
             if key not in merged:
                 merged[key] = ch
                 order.append(key)
+
+        # 频道覆盖（管理后台：禁用/改分组/改名）：只在输出前应用，不改动择优/去重逻辑
+        overrides = _get_channel_overrides()
+        for key in list(order):
+            ov = overrides.get(key)
+            if not ov:
+                continue
+            if ov.get("enabled") == 0:
+                merged.pop(key, None)
+                order.remove(key)
+                continue
+            if ov.get("display_name"):
+                merged[key] = dict(merged[key], name=ov["display_name"])
+            if ov.get("group_title"):
+                merged[key] = dict(merged[key], group_title=ov["group_title"])
 
         # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后）-> B站直播，其余兜底
         order.sort(key=lambda k: GROUP_ORDER.get(merged[k]["group_title"], 3))
@@ -266,6 +363,7 @@ class AggregatorUtils:
 
         kept = []
         dropped = []
+        fail_limit = AggregatorUtils._stream_fail_limit()
         for ch in channels:
             url = ch["url"]
             if results[url]:
@@ -273,13 +371,13 @@ class AggregatorUtils:
                 kept.append(ch)
             else:
                 failures[url] = failures.get(url, 0) + 1
-                if failures[url] >= STREAM_FAIL_LIMIT:
+                if failures[url] >= fail_limit:
                     dropped.append(ch)
                 else:
-                    kept.append(ch)  # 第一轮失败保留，给第二次机会
+                    kept.append(ch)  # 首轮失败保留，给第二次机会
 
         if dropped:
-            _log(f"探测过滤：丢弃 {len(dropped)} 个连续 {STREAM_FAIL_LIMIT} 轮不可达的频道")
+            _log(f"探测过滤：丢弃 {len(dropped)} 个连续 {fail_limit} 轮不可达的频道")
             for ch in dropped:
                 _log(f"  丢弃: {ch['name']}")
 
@@ -384,8 +482,8 @@ class AggregatorUtils:
         try:
             # B 站测试模式：跳过 hntv 官方源与公开源拉取，只收集 B 站直播频道
             # （频繁重启测试时避免拉公开源+探测 70 频道拖慢启动）
-            if BILIBILI_ONLY_MODE:
-                _log("测试模式（BILIBILI_ONLY_MODE）：跳过 hntv/公开源，仅聚合 B 站直播")
+            if AggregatorUtils.is_bilibili_only_mode():
+                _log("测试模式（bilibili_only_mode）：跳过 hntv/公开源，仅聚合 B 站直播")
                 hntv_channels = []
                 public_channels = []
             else:
@@ -404,6 +502,14 @@ class AggregatorUtils:
                 hntv_channels, public_channels, bilibili_channels)
             atomic_write_text(AGGREGATED_M3U_PATH, m3u_content)
             _log(f"聚合结果已保存到 {AGGREGATED_M3U_PATH}")
+            _fire_refresh_callbacks()
+            # 关键事件入库（管理页日志可查）
+            try:
+                from admin import db
+                db.record_event('INFO', 'aggregator',
+                                f"聚合完成: 共 {m3u_content.count('#EXTINF')} 个频道已保存")
+            except Exception:
+                pass
 
             return m3u_content
         except Exception as e:
@@ -435,8 +541,8 @@ class AggregatorUtils:
         """官方源刷新内部实现（调用方必须已持有 _aggregate_lock）"""
         try:
             # B 站测试模式：跳过 hntv 官方源与公开源，仅刷新 B 站直播频道
-            if BILIBILI_ONLY_MODE:
-                _log("测试模式（BILIBILI_ONLY_MODE）：官方源刷新跳过 hntv/公开源")
+            if AggregatorUtils.is_bilibili_only_mode():
+                _log("测试模式（bilibili_only_mode）：官方源刷新跳过 hntv/公开源")
                 hntv_channels = []
                 public_channels = []
             else:
@@ -455,6 +561,14 @@ class AggregatorUtils:
             _log(f"官方源刷新完成，已更新 {AGGREGATED_M3U_PATH}"
                   f"（hntv {len(hntv_channels)} 个 + 公开 {len(public_channels)} 个 + "
                   f"B站直播 {len(bilibili_channels)} 个）")
+            _fire_refresh_callbacks()
+            # 关键事件入库（管理页日志可查）
+            try:
+                from admin import db
+                db.record_event('INFO', 'aggregator',
+                                f"官方源刷新完成: 共 {m3u_content.count('#EXTINF')} 个频道")
+            except Exception:
+                pass
             return m3u_content
         except Exception as e:
             _log(f"官方源刷新出错: {str(e)}")
@@ -480,9 +594,10 @@ class AggregatorUtils:
                 return content
             # 聚合失败或被占用（后台聚合进行中）→ 降级保证有内容返回：
             # 测试模式返回 B 站列表（不碰 hntv/公开源），正式模式返回 hntv 官方源
+            bili_only = AggregatorUtils.is_bilibili_only_mode()
             _log("聚合不可用（生成失败或进行中），降级返回 "
-                  + ("B站直播" if BILIBILI_ONLY_MODE else "hntv 官方源"))
-            if BILIBILI_ONLY_MODE:
+                  + ("B站直播" if bili_only else "hntv 官方源"))
+            if bili_only:
                 return AggregatorUtils.get_bilibili_only_m3u()
             return AggregatorUtils.get_hntv_only_m3u()
         except Exception as e:
