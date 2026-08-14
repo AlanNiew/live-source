@@ -1,9 +1,14 @@
 {% extends "admin/base.html" %}
 {% block title %}日志{% endblock %}
 {% block content %}
-<div id="alertBox"></div>
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="page-title"><i class="bi bi-journal-text me-2 text-primary"></i>日志</div>
+    <div class="text-secondary small">普通日志仅 WARNING+ 入库；INFO 级为关键事件（服务启停 / 聚合完成 / 告警结果 / 管理操作审计）</div>
+  </div>
+</div>
 
-<div class="card shadow-sm mb-3">
+<div class="card mb-3">
   <div class="card-body py-2">
     <form class="row g-2 align-items-center" id="filterForm">
       <div class="col-auto">
@@ -11,29 +16,31 @@
           <option value="">全部级别</option>
           <option value="ERROR">ERROR</option>
           <option value="WARNING">WARNING</option>
-          <option value="INFO">INFO</option>
+          <option value="INFO">INFO（关键事件）</option>
         </select>
       </div>
       <div class="col-md-4">
-        <input class="form-control form-control-sm" id="qInput" placeholder="关键词（内容/模块）…">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text"><i class="bi bi-search"></i></span>
+          <input class="form-control" id="qInput" placeholder="关键词（内容/模块）…">
+        </div>
       </div>
       <div class="col-auto">
-        <button class="btn btn-sm btn-primary" type="submit">查询</button>
+        <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-search me-1"></i>查询</button>
       </div>
     </form>
-    <div class="form-text">普通日志仅 WARNING+ 入库（防膨胀）；INFO 级为关键事件（服务启停 / 聚合完成 / 告警结果 / 管理操作审计）。保留最近 7 天。</div>
   </div>
 </div>
 
-<div class="card shadow-sm">
+<div class="card">
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0">
+      <table class="table table-hover mb-0">
         <thead><tr><th>时间</th><th>级别</th><th>模块</th><th>内容</th></tr></thead>
         <tbody id="logsBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
       </table>
     </div>
-    <div class="p-2" id="pagerBox"></div>
+    <div class="p-3" id="pagerBox"></div>
   </div>
 </div>
 {% endblock %}
@@ -59,9 +66,9 @@ async function load() {
       <tr>
         <td class="text-nowrap small">${esc(r.ts)}</td>
         <td>${levelBadge(r.level)}</td>
-        <td>${esc(r.module)}</td>
+        <td><span class="badge text-bg-light border">${esc(r.module)}</span></td>
         <td class="text-break">${esc(r.message)}</td>
-      </tr>`).join('') : '<tr><td colspan="4" class="text-center text-secondary">暂无日志</td></tr>';
+      </tr>`).join('') : emptyRow(4, '暂无日志', 'bi-journal-text');
     renderPager(document.getElementById('pagerBox'), data, p => { page = p; load(); });
   } catch (err) {
     toast(err.message, false);

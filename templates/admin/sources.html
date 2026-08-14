@@ -1,52 +1,64 @@
 {% extends "admin/base.html" %}
 {% block title %}源管理{% endblock %}
 {% block content %}
-<div id="alertBox"></div>
-
-<div class="card shadow-sm mb-4">
-  <div class="card-header">新增源（公开 m3u 源 / B 站房间）</div>
-  <div class="card-body">
-    <form class="row g-2 align-items-end" id="addForm">
-      <div class="col-md-2">
-        <label class="form-label">类型</label>
-        <select class="form-select" id="addType">
-          <option value="public">public（公开 m3u 源）</option>
-          <option value="bilibili">bilibili（B 站房间）</option>
-        </select>
-      </div>
-      <div class="col-md-3">
-        <label class="form-label">名称</label>
-        <input class="form-control" id="addName" placeholder="如：iptv-org" required>
-      </div>
-      <div class="col-md-4">
-        <label class="form-label">url（bilibili 填房间号）</label>
-        <input class="form-control" id="addUrl" placeholder="http://…/tv.m3u 或 8178490">
-      </div>
-      <div class="col-md-1">
-        <label class="form-label">排序</label>
-        <input class="form-control" id="addSort" type="number" value="0">
-      </div>
-      <div class="col-md-2 d-flex gap-2">
-        <button class="btn btn-primary flex-fill" type="submit">添加</button>
-        <button class="btn btn-outline-secondary flex-fill" id="importBtn" type="button" hidden>导入默认源</button>
-        <button class="btn btn-outline-secondary flex-fill" id="refreshBtn" type="button">立即刷新</button>
-      </div>
-    </form>
-    <div class="form-text">B 站源 url 填直播间号（如 8178490），留空则聚合时跳过；立即刷新会后台重新聚合全部源。
-      「config 默认」行为 config.py 种子值（未入库，只读），可点「导入默认源」落库后编辑。</div>
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="page-title"><i class="bi bi-rss me-2 text-primary"></i>源管理</div>
+    <div class="text-secondary small">公开 m3u 源与 B 站房间的增删启停；变更后自动后台聚合</div>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-soft btn-sm" id="importBtn" hidden><i class="bi bi-download me-1"></i>导入默认源</button>
+    <button class="btn btn-soft btn-sm" id="refreshBtn"><i class="bi bi-arrow-clockwise me-1"></i>立即刷新</button>
+    <button class="btn btn-primary btn-sm" data-bs-toggle="collapse" data-bs-target="#addCard">
+      <i class="bi bi-plus-lg me-1"></i>新增源
+    </button>
   </div>
 </div>
 
-<div class="card shadow-sm">
+<div class="collapse mb-3" id="addCard">
+  <div class="card">
+    <div class="card-header">新增源（公开 m3u 源 / B 站房间）</div>
+    <div class="card-body">
+      <form class="row g-2 align-items-end" id="addForm">
+        <div class="col-md-2">
+          <label class="form-label small fw-semibold">类型</label>
+          <select class="form-select" id="addType">
+            <option value="public">public（公开 m3u 源）</option>
+            <option value="bilibili">bilibili（B 站房间）</option>
+          </select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small fw-semibold">名称</label>
+          <input class="form-control" id="addName" placeholder="如：iptv-org" required>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small fw-semibold">url（bilibili 填房间号）</label>
+          <input class="form-control" id="addUrl" placeholder="http://…/tv.m3u 或 8178490">
+        </div>
+        <div class="col-md-1">
+          <label class="form-label small fw-semibold">排序</label>
+          <input class="form-control" id="addSort" type="number" value="0">
+        </div>
+        <div class="col-md-2">
+          <button class="btn btn-primary w-100" type="submit"><i class="bi bi-plus-lg me-1"></i>添加</button>
+        </div>
+      </form>
+      <div class="form-text mt-2"><i class="bi bi-info-circle me-1"></i>
+        B 站源 url 填直播间号（如 8178490）；「config 默认」行为 config.py 种子值（只读），点「导入默认源」落库后可编辑。</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
   <div class="card-header">源列表（当前生效来源）</div>
   <div class="card-body p-0">
     <div class="table-responsive">
-      <table class="table table-sm table-hover mb-0 align-middle">
+      <table class="table table-hover mb-0">
         <thead><tr><th>#</th><th>类型</th><th>名称</th><th>url / 房间号</th><th>排序</th><th>启用</th><th class="text-end">操作</th></tr></thead>
         <tbody id="sourcesBody"><tr><td colspan="7" class="text-center text-secondary">加载中…</td></tr></tbody>
       </table>
     </div>
-    <div class="p-2" id="pagerBox"></div>
+    <div class="p-3" id="pagerBox"></div>
   </div>
 </div>
 {% endblock %}
@@ -64,58 +76,72 @@ async function load() {
   try {
     const data = await api(`/api/admin/sources?page=${page}&page_size=${pageSize}`);
     const tb = document.getElementById('sourcesBody');
-    // 有兜底行时显示「导入默认源」按钮
     const hasDefaults = data.items.some(r => r.config_default);
     document.getElementById('importBtn').hidden = !hasDefaults;
     tb.innerHTML = data.items.length ? data.items.map(r => `
       <tr class="${r.config_default ? 'table-secondary' : ''}">
-        <td>${r.id ?? '—'}</td>
+        <td class="text-secondary small">${r.id ?? '—'}</td>
         <td>${typeBadge(r.type)}${r.config_default ? ' <span class="badge text-bg-secondary">config 默认</span>' : ''}</td>
-        <td>${esc(r.name)}</td>
-        <td class="text-break">${esc(r.url || '')}</td>
+        <td class="fw-semibold">${esc(r.name)}</td>
+        <td class="text-break small text-secondary">${esc(r.url || '—')}</td>
         <td>${esc(r.sort_order)}</td>
         <td>
           <div class="form-check form-switch mb-0">
-            <input class="form-check-input" type="checkbox" data-id="${r.id ?? ''}" ${r.enabled ? 'checked' : ''} ${r.config_default ? 'disabled' : ''}>
+            <input class="form-check-input" type="checkbox" data-id="${r.id ?? ''}"
+                   ${r.enabled ? 'checked' : ''} ${r.config_default ? 'disabled' : ''}>
           </div>
         </td>
         <td class="text-end text-nowrap">
-          ${r.config_default ? '<span class="text-secondary small">只读</span>' : `
-          <button class="btn btn-sm btn-outline-primary" data-act="edit" data-id="${r.id}"
-                  data-name="${esc(r.name)}" data-url="${esc(r.url || '')}" data-sort="${esc(r.sort_order)}">编辑</button>
-          <button class="btn btn-sm btn-outline-danger" data-act="del" data-id="${r.id}">删除</button>`}
+          ${r.config_default ? '<span class="text-secondary small"><i class="bi bi-lock me-1"></i>只读</span>' : `
+          <button class="btn btn-sm btn-soft" data-act="edit" data-id="${r.id}"
+                  data-name="${esc(r.name)}" data-url="${esc(r.url || '')}" data-sort="${esc(r.sort_order)}"
+                  title="编辑"><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-sm btn-outline-danger" data-act="del" data-id="${r.id}"
+                  title="删除"><i class="bi bi-trash"></i></button>`}
         </td>
-      </tr>`).join('') : '<tr><td colspan="7" class="text-center text-secondary">暂无源，请先添加</td></tr>';
+      </tr>`).join('') : emptyRow(7, '暂无源，请先添加', 'bi-rss');
 
     tb.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', async () => {
       try {
         await api(`/api/admin/sources/${cb.dataset.id}`, 'PUT', {enabled: cb.checked});
-        toast('已更新启用状态');
+        toast(cb.checked ? '已启用，正在后台刷新聚合' : '已禁用，正在后台刷新聚合');
       } catch (err) { toast(err.message, false); cb.checked = !cb.checked; }
     }));
+
     tb.querySelectorAll('[data-act=edit]').forEach(btn => btn.addEventListener('click', async () => {
-      const name = prompt('名称：', btn.dataset.name);
-      if (name === null) return;
-      const url = prompt('url（bilibili 填房间号数字，留空=不改）：', btn.dataset.url);
-      if (url === null) return;
-      const sort = prompt('排序（整数）：', btn.dataset.sort);
-      if (sort === null) return;
+      const values = await formDialog({
+        title: `编辑源 #${btn.dataset.id}`,
+        fields: [
+          {key: 'name', label: '名称', type: 'text', value: btn.dataset.name},
+          {key: 'url', label: 'url（bilibili 填房间号数字）', type: 'text', value: btn.dataset.url},
+          {key: 'sort_order', label: '排序（整数）', type: 'number', value: btn.dataset.sort},
+        ],
+      });
+      if (values === null) return;
       try {
         await api(`/api/admin/sources/${btn.dataset.id}`, 'PUT', {
-          name, url, sort_order: Number(sort),
+          name: values.name.trim(), url: values.url.trim(),
+          sort_order: Number(values.sort_order || 0),
         });
-        toast('已保存');
+        toast('已保存，正在后台刷新聚合');
         load();
       } catch (err) { toast(err.message, false); }
     }));
+
     tb.querySelectorAll('[data-act=del]').forEach(btn => btn.addEventListener('click', async () => {
-      if (!confirm(`确定删除源 #${btn.dataset.id}？`)) return;
+      const ok = await confirmDialog({
+        title: '删除源',
+        message: `确定删除源 #${btn.dataset.id}？删除后立即生效（回退 config 兜底）。`,
+        okText: '删除', danger: true,
+      });
+      if (!ok) return;
       try {
         await api(`/api/admin/sources/${btn.dataset.id}`, 'DELETE');
         toast('已删除');
         load();
       } catch (err) { toast(err.message, false); }
     }));
+
     renderPager(document.getElementById('pagerBox'), data, p => { page = p; load(); });
   } catch (err) {
     toast(err.message, false);
@@ -128,26 +154,36 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
   const name = document.getElementById('addName').value.trim();
   const url = document.getElementById('addUrl').value.trim();
   const sortOrder = Number(document.getElementById('addSort').value || 0);
+  if (!name) { toast('名称不能为空', false); return; }
   if (type === 'public' && !url) { toast('public 源必须填 url', false); return; }
   if (type === 'bilibili' && url && !/^\d+$/.test(url)) { toast('bilibili 源 url 必须是房间号数字', false); return; }
+  const btn = e.target.querySelector('button[type=submit]');
+  btnLoading(btn, true, '添加中…');
   try {
     await api('/api/admin/sources', 'POST', {type, name, url, sort_order: sortOrder});
     toast('已添加，正在后台刷新聚合');
     e.target.reset();
     page = 1;
     load();
-  } catch (err) { toast(err.message, false); }
+  } catch (err) { toast(err.message, false); } finally { btnLoading(btn, false); }
 });
 
 document.getElementById('refreshBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('refreshBtn');
+  btnLoading(btn, true, '请求中…');
   try {
     await api('/api/admin/sources/refresh', 'POST');
     toast('已请求后台刷新，稍后列表更新');
-  } catch (err) { toast(err.message, false); }
+  } catch (err) { toast(err.message, false); } finally { btnLoading(btn, false); }
 });
 
 document.getElementById('importBtn').addEventListener('click', async () => {
-  if (!confirm('把 config 默认源导入数据库？导入后可编辑/删除；B 站 uid 条目将解析房间号，解析失败会跳过。')) return;
+  const ok = await confirmDialog({
+    title: '导入默认源',
+    message: '把 config 默认源导入数据库？导入后可编辑/删除；B 站 uid 条目将解析房间号，解析失败会跳过。',
+    okText: '导入',
+  });
+  if (!ok) return;
   try {
     const data = await api('/api/admin/sources/import-defaults', 'POST');
     const msg = `已导入 ${data.imported} 个默认源`

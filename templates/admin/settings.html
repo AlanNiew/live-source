@@ -1,68 +1,127 @@
 {% extends "admin/base.html" %}
 {% block title %}设置{% endblock %}
 {% block content %}
-<div id="alertBox"></div>
-
-<div class="card shadow-sm mb-3">
-  <div class="card-header">运行时设置（DB 优先，config/env 兜底；保存后对后续轮次即时生效）</div>
-  <div class="card-body">
-    <form id="settingsForm" class="row g-3">
-      <div class="col-md-6">
-        <label class="form-label d-flex justify-content-between">
-          <span>监控频道数阈值 <code>min_channel_count</code></span>
-        </label>
-        <input type="number" min="1" class="form-control" id="min_channel_count">
-        <div class="form-text">常规检测：频道数低于此值判定 FAIL（测试模式建议 1，正式模式 30）。</div>
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">聚合探测失败轮数 <code>stream_fail_limit</code></label>
-        <input type="number" min="1" class="form-control" id="stream_fail_limit">
-        <div class="form-text">公开源频道连续 N 轮探测不可达即丢弃。</div>
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">日志保留天数 <code>log_keep_days</code></label>
-        <input type="number" min="1" class="form-control" id="log_keep_days">
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">常规检测历史保留轮数 <code>monitor_history_keep</code></label>
-        <input type="number" min="1" class="form-control" id="monitor_history_keep">
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">流探测历史保留条数 <code>stream_history_keep</code></label>
-        <input type="number" min="1" class="form-control" id="stream_history_keep">
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">本服务对外地址 <code>public_base_url</code></label>
-        <input type="url" class="form-control" id="public_base_url" placeholder="http://服务器IP:15002">
-        <div class="form-text">B 站频道 URL 由它生成；播放器/盒子必须能访问。留空 = 使用 .env / 默认值。</div>
-      </div>
-      <div class="col-md-6">
-        <label class="form-label">分组健康率阈值 <code>group_health_ratios</code>（JSON）</label>
-        <textarea class="form-control font-monospace" id="group_health_ratios" rows="3"></textarea>
-        <div class="form-text">组名 → 0~1 数值，如 {"河南卫视": 0.9, "央视": 0.8}。</div>
-      </div>
-      <div class="col-md-6">
-        <div class="form-check form-switch mb-2">
-          <input class="form-check-input" type="checkbox" id="bilibili_only_mode">
-          <label class="form-check-label" for="bilibili_only_mode">B 站测试模式 <code>bilibili_only_mode</code></label>
-        </div>
-        <div class="form-text">开启：聚合只收集 B 站直播（跳过 hntv/公开源）。调度线程布局仍按启动时 env 定死。</div>
-        <div class="form-check form-switch mt-2">
-          <input class="form-check-input" type="checkbox" id="alert_enabled">
-          <label class="form-check-label" for="alert_enabled">告警邮件开关 <code>alert_enabled</code></label>
-        </div>
-        <div class="form-text">关闭：监控/流探测不再发送任何告警邮件（只记日志）。</div>
-      </div>
-      <div class="col-12 d-flex gap-2">
-        <button class="btn btn-primary" type="submit">保存</button>
-        <button class="btn btn-outline-secondary" type="button" id="reloadBtn">重新载入</button>
-      </div>
-    </form>
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="page-title"><i class="bi bi-gear me-2 text-primary"></i>设置</div>
+    <div class="text-secondary small">运行时配置：DB 优先、config/env 兜底，保存后对后续轮次即时生效</div>
   </div>
 </div>
+
+<form id="settingsForm">
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-sliders me-1"></i>监控与聚合阈值</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label small fw-semibold d-flex justify-content-between">
+            <span>监控频道数阈值 <code>min_channel_count</code></span>
+            <span class="badge text-bg-light border setting-tag" data-key="min_channel_count">config 默认</span>
+          </label>
+          <input type="number" min="1" class="form-control" id="min_channel_count">
+          <div class="form-text">常规检测：频道数低于此值判定 FAIL（测试模式建议 1，正式模式 30）。</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold d-flex justify-content-between">
+            <span>聚合探测失败轮数 <code>stream_fail_limit</code></span>
+            <span class="badge text-bg-light border setting-tag" data-key="stream_fail_limit">config 默认</span>
+          </label>
+          <input type="number" min="1" class="form-control" id="stream_fail_limit">
+          <div class="form-text">公开源频道连续 N 轮探测不可达即丢弃。</div>
+        </div>
+        <div>
+          <label class="form-label small fw-semibold d-flex justify-content-between">
+            <span>分组健康率阈值 <code>group_health_ratios</code>（JSON）</span>
+            <span class="badge text-bg-light border setting-tag" data-key="group_health_ratios">config 默认</span>
+          </label>
+          <textarea class="form-control font-monospace small" id="group_health_ratios" rows="4"></textarea>
+          <div class="form-text">组名 → 0~1 数值，如 {"河南卫视": 0.9, "央视": 0.8}。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-database me-1"></i>保留策略</div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold d-flex justify-content-between">
+              <span>日志保留天数 <code>log_keep_days</code></span>
+              <span class="badge text-bg-light border setting-tag" data-key="log_keep_days">config 默认</span>
+            </label>
+            <input type="number" min="1" class="form-control" id="log_keep_days">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold d-flex justify-content-between">
+              <span>健康历史轮数 <code>monitor_history_keep</code></span>
+              <span class="badge text-bg-light border setting-tag" data-key="monitor_history_keep">config 默认</span>
+            </label>
+            <input type="number" min="1" class="form-control" id="monitor_history_keep">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small fw-semibold d-flex justify-content-between">
+              <span>流探测条数 <code>stream_history_keep</code></span>
+              <span class="badge text-bg-light border setting-tag" data-key="stream_history_keep">config 默认</span>
+            </label>
+            <input type="number" min="1" class="form-control" id="stream_history_keep">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><i class="bi bi-toggle-on me-1"></i>服务地址与开关</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label small fw-semibold d-flex justify-content-between">
+            <span>本服务对外地址 <code>public_base_url</code></span>
+            <span class="badge text-bg-light border setting-tag" data-key="public_base_url">config 默认</span>
+          </label>
+          <input type="url" class="form-control" id="public_base_url" placeholder="http://服务器IP:15002">
+          <div class="form-text">B 站频道 URL 由它生成；播放器/盒子必须能访问。</div>
+        </div>
+        <div class="form-check form-switch mb-2">
+          <input class="form-check-input" type="checkbox" id="bilibili_only_mode">
+          <label class="form-check-label" for="bilibili_only_mode">
+            B 站测试模式 <code>bilibili_only_mode</code>
+            <span class="badge text-bg-light border setting-tag" data-key="bilibili_only_mode">config 默认</span>
+          </label>
+          <div class="form-text">开启：聚合只收集 B 站直播（跳过 hntv/公开源）。调度线程布局仍按启动时 env 定死。</div>
+        </div>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" id="alert_enabled">
+          <label class="form-check-label" for="alert_enabled">
+            告警邮件开关 <code>alert_enabled</code>
+            <span class="badge text-bg-light border setting-tag" data-key="alert_enabled">config 默认</span>
+          </label>
+          <div class="form-text">关闭：监控/流探测不再发送任何告警邮件（只记日志）。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="d-flex gap-2 mt-3">
+  <button class="btn btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>保存全部设置</button>
+  <button class="btn btn-soft" type="button" id="reloadBtn"><i class="bi bi-arrow-clockwise me-1"></i>重新载入</button>
+</div>
+</form>
 {% endblock %}
 {% block scripts %}
 <script>
+/* 标记每个字段来源：DB 已入库 / config 默认 */
+function markTags(settings) {
+  document.querySelectorAll('.setting-tag').forEach(tag => {
+    const key = tag.dataset.key;
+    const inDb = Object.prototype.hasOwnProperty.call(settings, key);
+    tag.className = inDb ? 'badge text-bg-primary' : 'badge text-bg-light border';
+    tag.textContent = inDb ? '已入库' : 'config 默认';
+  });
+}
+
 async function loadSettings() {
   try {
     const data = await api('/api/admin/settings');
@@ -77,6 +136,7 @@ async function loadSettings() {
       JSON.stringify(e.group_health_ratios, null, 2);
     document.getElementById('bilibili_only_mode').checked = !!e.bilibili_only_mode;
     document.getElementById('alert_enabled').checked = !!e.alert_enabled;
+    markTags(data.settings || {});
   } catch (err) { toast(err.message, false); }
 }
 
@@ -98,11 +158,13 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
     toast('分组健康率不是合法 JSON', false);
     return;
   }
+  const btn = e.target.querySelector('button[type=submit]');
+  btnLoading(btn, true, '保存中…');
   try {
-    const data = await api('/api/admin/settings', 'PUT', body);
+    await api('/api/admin/settings', 'PUT', body);
     toast('已保存，对后续检测/聚合轮次生效');
     loadSettings();
-  } catch (err) { toast(err.message, false); }
+  } catch (err) { toast(err.message, false); } finally { btnLoading(btn, false); }
 });
 
 document.getElementById('reloadBtn').addEventListener('click', loadSettings);
