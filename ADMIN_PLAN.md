@@ -94,8 +94,9 @@ CREATE TABLE settings (
 - **sources 表替代 `config.PUBLIC_M3U_SOURCES` 和 `config.BILIBILI_ROOMS`**，
   config 保留为"首次启动种子值/兜底"：DB 空表时回退 config（向后兼容，现有测试锁行为）
 - **channel_overrides 是覆盖层**：不动聚合择优逻辑，只在输出前应用（禁用/改分组/改名），侵入最小
-- 清理策略：monitor_history 保留最近 500 轮；stream_check_history 保留最近 2000 条；
-  logs 保留最近 7 天（WARNING+ 数据量小）
+- 清理策略：monitor_history 保留最近 500 轮；stream_check_history 保留最近 20000 条
+  （约 6 天；30 分钟一轮×约 70 频道≈3400 条/天，每轮探测整轮批量落库后只清理一次）；
+  logs 保留最近 7 天（GMT+8 阈值，每天至多清理一次）
 - 并发写：模块级 `threading.Lock` 串行写；每操作短连接（`check_same_thread=False` + 每连接独立）
 
 ---
@@ -113,15 +114,17 @@ POST   /api/admin/sources                  {type, url?, name} 新增
 PUT    /api/admin/sources/<id>             {name?, url?, enabled?, sort_order?}
 DELETE /api/admin/sources/<id>
 POST   /api/admin/sources/refresh          → request_async_refresh() 立即聚合
+POST   /api/admin/sources/import-defaults  → 把 config 兜底源落库（幂等；uid 解析失败跳过）
 
 # 频道覆盖
-GET  /api/admin/channels                  聚合后频道 + 覆盖状态（分页/搜索）
-PUT  /api/admin/channels/<key>            {enabled?, group_title?, display_name?}
+GET    /api/admin/channels                 聚合后频道 + 覆盖状态（分页/搜索）
+PUT    /api/admin/channels/<key>           {enabled?, group_title?, display_name?}
+DELETE /api/admin/channels/<key>           删除覆盖恢复默认
 
 # 监控
 GET /api/admin/monitor/summary             当前健康/频道数/最近轮次
-GET /api/admin/monitor/history             ?limit=500 健康趋势
-GET /api/admin/monitor/streams             ?page=&unreachable=1 流探测明细
+GET /api/admin/monitor/history             健康趋势
+GET /api/admin/monitor/streams             流探测明细
 
 # 日志
 GET /api/admin/logs                        ?level=&q=&page=
@@ -132,6 +135,53 @@ PUT /api/admin/settings                    {bilibili_only_mode?}
 ```
 
 **鉴权**：管理 API 全部校验 `session['admin']`；`.env` 新增 `ADMIN_PASSWORD`（默认空 = 管理界面禁用，安全默认）。
+**操作审计**：登录成功/失败、退出、源增删改/导入/刷新、频道覆盖变更、设置变更均写入 logs 表（module=admin，
+管理页日志可查）；关键事件（服务启停/聚合完成/告警结果/EPG 更新）以 INFO 入库（record_event）。
+
+### 分页/排序契约（P2 开工前已固化）
+
+**通用响应包裹**（所有列表接口统一）：
+
+```json
+{"items": [...], "total": 123, "page": 1, "page_size": 20, "has_more": true}
+```
+
+**通用参数**：
+
+| 参数 | 默认 | 规则 |
+|---|---|---|
+| `page` | 1 | 1 起；越界返回空 items（total 不变） |
+| `page_size` | 20 | 上限 200（超出截断），下限 1 |
+| `order` | 各端点默认 | `asc`/`desc`；非法值回退默认（宽松，不报错） |
+| `q` | 无 | 子串匹配（大小写不敏感），匹配字段见各端点 |
+
+**各端点约定**：
+
+| 端点 | sort 白名单 | 默认排序 | q 匹配字段 | 其他过滤 |
+|---|---|---|---|---|
+| GET /api/admin/sources | id / sort_order | sort_order ASC, id ASC | name、url | type=public\|bilibili、enabled=0\|1 || GET /api/admin/channels | name / group | 聚合输出顺序（河南卫视→央视→卫视→B站） | 频道名（含覆盖后显示名） | 无 |
+| GET /api/admin/monitor/history | 无（固定 id） | id DESC（新→旧） | 无 | 无 |
+| GET /api/admin/monitor/streams | ts / ok | id DESC | channel_name、url | unreachable=1 |
+| GET /api/admin/logs | 无（固定 id） | id DESC | message、module | level=ERROR\|WARNING\|INFO |
+
+**源列表兜底语义**：GET /sources 返回「当前生效来源」——DB 行 + 该类型无启用源时的 config 兜底行
+（`config_default: true`、`id: null`，只读展示，与聚合回退语义一致）；
+`POST /sources/import-defaults` 一键把兜底源落库（幂等，B 站 uid 条目服务端解析房间号、失败跳过）。
+
+**频道覆盖语义**：
+
+- `key` = `normalize_name` 后的频道名（聚合去重同款归一化，URL 编码后放路径）
+- 频道列表项：`{key, name, group, url, enabled, override}`；`enabled=false` 的频道不在 m3u 中，
+  但**仍出现在列表**（`enabled=false`、`url=null`、`override.enabled=0`），便于管理端重新启用
+- PUT body 三字段全部可选、可组合；`enabled=false` 聚合时跳过，改分组/改名仅影响输出
+- 变更后自动 `request_async_refresh()` + 清播放列表缓存
+
+**设置语义**：运行时设置「DB 优先、config 兜底」，支持键：
+`bilibili_only_mode`(bool) / `min_channel_count`(int) / `stream_fail_limit`(int) /
+`monitor_history_keep`(int) / `stream_history_keep`(int) / `log_keep_days`(int) /
+`group_health_ratios`(JSON，组名->0~1) / `public_base_url`(str，B 站频道 URL 基础地址) /
+`alert_enabled`(bool，false 时 send_alert 整体静默)；对后续聚合/监控轮次即时生效（调度线程布局按启动时 env 定死）。
+初始化脚本 `scripts/seed_admin_settings.py`（幂等，`--reset` 覆盖）；密钥类（API_TOKEN/email 等）不落库，保持 .env。
 
 ---
 
@@ -144,10 +194,11 @@ PUT /api/admin/settings                    {bilibili_only_mode?}
 # 改：
 def get_public_source_urls():
     urls = AdminDB.get_enabled_public_urls()   # from admin.db
-    return urls or list(PUBLIC_M3U_SOURCES)    # 空表回退 config
+    return urls or list(PUBLIC_M3U_SOURCES)    # 空表/未初始化回退 config
 ```
 
-BILIBILI_ROOMS 同理 → `AdminDB.get_enabled_bilibili_rooms()` 兜底。
+- 查询前先过 `AdminDB.db_ready()`（文件不存在直接跳过，避免凭空创建空库文件）
+- BILIBILI_ROOMS 同理 → `AdminDB.get_enabled_bilibili_rooms()` 兜底（aggregator.list_bilibili_rooms）
 
 ### 2. 聚合输出应用频道覆盖（改 core/aggregator.py:aggregate_m3u）
 
@@ -157,7 +208,7 @@ BILIBILI_ROOMS 同理 → `AdminDB.get_enabled_bilibili_rooms()` 兜底。
 ### 3. 监控落库（改 monitoring/checks.py 两处，非侵入）
 
 - run_check_once 末尾 → AdminDB.save_monitor_history(...)
-- run_stream_check_once 末尾 → AdminDB.save_stream_history(...)
+- run_stream_check_once 末尾 → AdminDB.save_stream_history_batch(...)（整轮批量写入 + 一次清理）
 - 包裹 try/except，落库失败只记日志不影响检测
 
 ### 4. 日志改造（core/logger.py，替换全部 print）
@@ -188,10 +239,10 @@ BILIBILI_ROOMS 同理 → `AdminDB.get_enabled_bilibili_rooms()` 兜底。
 
 | 阶段 | 内容 | 验证标准 |
 |---|---|---|
-| P1 | admin/db.py 数据层 + logging 改造 + 监控落库 | unittest 全绿；admin.db 有数据 |
-| P2 | sources DB 化（兜底）+ 频道覆盖层 + 管理 API | 现有 96 测试无回归；curl 管理 API 全通 |
-| P3 | Web 界面（登录+5 页面） | 浏览器完整操作 |
-| P4 | 打磨（趋势图/分页/docker 适配） | 生产容器全流程 |
+| P1 | admin/db.py 数据层 + logging 改造 + 监控落库 | ✅ 已完成（unittest 全绿；清理逻辑按 GMT+8） |
+| P2 | sources DB 化（兜底）+ 频道覆盖层 + 管理 API（契约已固化） | ✅ 已完成（146 测试全绿；curl 管理 API 全通） |
+| P3 | Web 界面（登录+5 页面） | ✅ 已完成（151 测试全绿；登录→页面渲染→API 数据链路冒烟通过） |
+| P4 | 打磨（趋势图/分页/docker 适配） | ✅ 代码完成（仪表盘趋势图 + 页码分页 + xml_data 持久卷）；容器构建需在部署机验证（本机无 docker） |
 
 ---
 

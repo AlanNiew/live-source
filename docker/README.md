@@ -31,7 +31,8 @@ docker compose -f docker/docker-compose.prod.yml up -d --build
 
 - 服务端口：容器内 `5002`，宿主机映射 `15002`（浏览器/播放器访问 `http://服务器IP:15002`）
 - 工作进程数：`GUNICORN_WORKERS=1`（必须为 1，调度线程在 import 时启动，多 worker 会重复执行定时任务）
-- 环境变量：由 `--env-file` 从项目根目录 `.env` 注入（`API_TOKEN`/`HNTV_SECRET_KEY`/`email`/`password`）
+- 环境变量：由 `--env-file` 从项目根目录 `.env` 注入（`API_TOKEN`/`HNTV_SECRET_KEY`/`ADMIN_PASSWORD`/`email`/`password`）
+- **数据持久化**：宿主机 `xml_data/` 挂载到容器 `/app/xml_data`（`admin.db` 管理数据、`app.log`、`aggregated.m3u` 聚合缓存等），容器重建/升级不丢管理配置与历史数据
 - 自动重启：容器异常退出后自动重启（`restart: unless-stopped`）
 
 ## 访问服务
@@ -40,12 +41,15 @@ docker compose -f docker/docker-compose.prod.yml up -d --build
 - 健康检查：`http://localhost:15002/health`
 - 直播列表：`http://localhost:15002/api/live.m3u8`
 - EPG 节目单：`http://localhost:15002/api/live.xml.gz`
+- **管理后台**：`http://localhost:15002/admin`（需 `.env` 配置 `ADMIN_PASSWORD`；未配置时整体禁用返回 403）
 
 ## 日志
 
 ```bash
 docker logs -f hntv-api
 ```
+
+应用日志（WARNING+）落盘在宿主机 `xml_data/app.log`（滚动 10MB×3），管理后台「日志」页可在线查看（保留 7 天）。
 
 ## 常见问题
 
