@@ -159,7 +159,8 @@ PUT /api/admin/settings                    {bilibili_only_mode?}
 
 | 端点 | sort 白名单 | 默认排序 | q 匹配字段 | 其他过滤 |
 |---|---|---|---|---|
-| GET /api/admin/sources | id / sort_order | sort_order ASC, id ASC | name、url | type=public\|bilibili、enabled=0\|1 || GET /api/admin/channels | name / group | 聚合输出顺序（河南卫视→央视→卫视→B站） | 频道名（含覆盖后显示名） | 无 |
+| GET /api/admin/sources | id / sort_order | sort_order ASC, id ASC | name、url | type=public\|bilibili\|custom、enabled=0\|1 |
+| GET /api/admin/channels | name / group | 聚合输出顺序（河南卫视→央视→卫视→自定义→B站） | 频道名（含覆盖后显示名） | 无 |
 | GET /api/admin/monitor/history | 无（固定 id） | id DESC（新→旧） | 无 | 无 |
 | GET /api/admin/monitor/streams | ts / ok | id DESC | channel_name、url | unreachable=1 |
 | GET /api/admin/logs | 无（固定 id） | id DESC | message、module | level=ERROR\|WARNING\|INFO |

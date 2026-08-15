@@ -176,6 +176,27 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.refresh_mock.assert_called_once()
 
+    def test_custom_source_crud_and_validation(self):
+        """custom 源：增删改查 + url 校验（必须 http(s)/rtmp 开头）"""
+        self._login()
+        # 缺 url → 400
+        self.assertEqual(self.client.post('/api/admin/sources',
+                                         json={'type': 'custom', 'name': '抖音台'}).status_code, 400)
+        # 非法协议 → 400
+        self.assertEqual(self.client.post('/api/admin/sources',
+                                         json={'type': 'custom', 'name': '抖音台',
+                                               'url': 'ftp://x/y'}).status_code, 400)
+        # 合法 → 201
+        resp = self.client.post('/api/admin/sources',
+                                json={'type': 'custom', 'name': '抖音台',
+                                      'url': 'http://127.0.0.1:8080/douyin/index.m3u8'})
+        self.assertEqual(resp.status_code, 201)
+        sid = resp.get_json()['id']
+        items = self.client.get('/api/admin/sources?type=custom').get_json()['items']
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['name'], '抖音台')
+        self.assertEqual(self.client.delete(f'/api/admin/sources/{sid}').status_code, 200)
+
     def test_sources_shows_config_defaults_when_db_empty(self):
         """DB 空：列表展示 config 兜底行（当前生效来源，config_default=true、id=null）"""
         import config

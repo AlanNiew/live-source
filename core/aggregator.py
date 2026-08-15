@@ -6,8 +6,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from config import (AGGREGATED_M3U_PATH, BILIBILI_GROUP_NAME, BILIBILI_ONLY_MODE,
-                    BILIBILI_ROOMS, CHANNEL_OVERRIDE_CACHE_TTL, FILTER_UNREACHABLE,
-                    GROUP_ORDER, HNTV_GROUP_NAME, PUBLIC_BASE_URL,
+                    BILIBILI_ROOMS, CHANNEL_OVERRIDE_CACHE_TTL, CUSTOM_GROUP_NAME,
+                    FILTER_UNREACHABLE, GROUP_ORDER, HNTV_GROUP_NAME, PUBLIC_BASE_URL,
                     PUBLIC_CHANNELS_CACHE_PATH, STREAM_CHECK_CONCURRENCY,
                     STREAM_FAILURES_PATH, STREAM_FAIL_LIMIT, STREAM_PROBE_UA_LOOSE)
 from core.atomic_io import atomic_write_text
@@ -236,20 +236,45 @@ class AggregatorUtils:
         return public_best
 
     @staticmethod
-    def aggregate_m3u(hntv_channels, public_channels, bilibili_channels=None):
+    def _get_custom_channels():
         """
-        合并 hntv 官方频道、公开源频道与 B 站直播频道：
+        自定义流频道（sources 表 type=custom，启用且 url 非空）：
+        外部工具转流后的稳定地址（如抖音经 streamlink/ffmpeg 转出的本地 HLS），
+        由管理员添加，不做可达性探测；按名去重补充进聚合
+        :return: 频道 dict 列表（name/url/group_title=tvg_name）
+        """
+        try:
+            from admin import db
+            if db.db_ready():
+                return [
+                    {'name': r['name'], 'url': r['url'],
+                     'group_title': CUSTOM_GROUP_NAME, 'tvg_name': r['name']}
+                    for r in db.get_sources('custom')
+                    if r['enabled'] and r['url']
+                ]
+        except Exception:
+            pass
+        return []
+
+    @staticmethod
+    def aggregate_m3u(hntv_channels, public_channels, bilibili_channels=None,
+                      custom_channels=None):
+        """
+        合并 hntv 官方频道、公开源频道、自定义流频道与 B 站直播频道：
         - 按频道名去重，hntv 官方源优先（同名保留官方地址）
         - 公开源只补充 hntv 没有的频道
         - 公开源内同台多个分辨率时，保留清晰度最高的一个
+        - 自定义流（外部转流，如抖音）独立分组「自定义」，按名去重补充
         - B 站直播频道独立分组，不参与同台去重（频道名不冲突）
-        注：可达性探测过滤已在 prepare_public_channels 阶段完成（官方源永不探测）
+        注：可达性探测过滤已在 prepare_public_channels 阶段完成（官方源/自定义流不探测）
         :param hntv_channels: hntv 官方频道列表（优先级最高）
         :param public_channels: 公开源频道列表（已过滤+中文化+探测过滤）
         :param bilibili_channels: B 站直播频道列表（已判定开播，可选）
+        :param custom_channels: 自定义流频道列表（可选）
         :return: 合并后的 m3u 文本
         """
         bilibili_channels = bilibili_channels or []
+        custom_channels = custom_channels or []
         merged = {}
         order = []  # 保持频道出现顺序，便于结果可读
 
@@ -263,6 +288,13 @@ class AggregatorUtils:
         # 公开源补充 hntv 没有的频道（同台按地址质量/分辨率择优）
         public_best = AggregatorUtils.pick_best_public(public_channels)
         for key, (ch, _score, _res) in public_best.items():
+            if key not in merged:
+                merged[key] = ch
+                order.append(key)
+
+        # 自定义流频道（外部转流，不探测；按名去重补充）
+        for ch in custom_channels:
+            key = SourceUtils.normalize_name(ch["name"])
             if key not in merged:
                 merged[key] = ch
                 order.append(key)
@@ -289,8 +321,8 @@ class AggregatorUtils:
             if ov.get("group_title"):
                 merged[key] = dict(merged[key], group_title=ov["group_title"])
 
-        # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后）-> B站直播，其余兜底
-        order.sort(key=lambda k: GROUP_ORDER.get(merged[k]["group_title"], 3))
+        # 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视 -> 自定义 -> B站直播，其余兜底
+        order.sort(key=lambda k: GROUP_ORDER.get(merged[k]["group_title"], 10))
 
         # 生成 m3u 文本
         m3u_content = "#EXTM3U\n\n"
@@ -308,8 +340,9 @@ class AggregatorUtils:
             )
 
         _log(f"聚合完成：hntv {len(hntv_channels)} 个 + 公开补充 "
-              f"{len(merged) - len(hntv_channels) - len(bilibili_channels)} 个 + "
-              f"B站直播 {len(bilibili_channels)} 个 = 共 {len(merged)} 个频道")
+              f"{len(merged) - len(hntv_channels) - len(bilibili_channels) - len(custom_channels)} 个 + "
+              f"自定义 {len(custom_channels)} 个 + B站直播 {len(bilibili_channels)} 个 = "
+              f"共 {len(merged)} 个频道")
         return m3u_content
 
     # ------------------------------------------------------------ 探测过滤
@@ -497,9 +530,13 @@ class AggregatorUtils:
             # 3. 收集 B 站直播频道（开播判定）
             bilibili_channels = AggregatorUtils.fetch_bilibili_channels()
 
-            # 4. 合并生成 m3u 并落盘（原子写入）
+            # 4. 自定义流频道（外部转流，不探测；测试模式同样生效）
+            custom_channels = AggregatorUtils._get_custom_channels()
+
+            # 5. 合并生成 m3u 并落盘（原子写入）
             m3u_content = AggregatorUtils.aggregate_m3u(
-                hntv_channels, public_channels, bilibili_channels)
+                hntv_channels, public_channels, bilibili_channels,
+                custom_channels=custom_channels)
             atomic_write_text(AGGREGATED_M3U_PATH, m3u_content)
             _log(f"聚合结果已保存到 {AGGREGATED_M3U_PATH}")
             _fire_refresh_callbacks()
@@ -555,12 +592,14 @@ class AggregatorUtils:
                     return AggregatorUtils._get_aggregated_m3u_locked()
 
             bilibili_channels = AggregatorUtils.fetch_bilibili_channels()
+            custom_channels = AggregatorUtils._get_custom_channels()
             m3u_content = AggregatorUtils.aggregate_m3u(
-                hntv_channels, public_channels, bilibili_channels)
+                hntv_channels, public_channels, bilibili_channels,
+                custom_channels=custom_channels)
             atomic_write_text(AGGREGATED_M3U_PATH, m3u_content)
             _log(f"官方源刷新完成，已更新 {AGGREGATED_M3U_PATH}"
                   f"（hntv {len(hntv_channels)} 个 + 公开 {len(public_channels)} 个 + "
-                  f"B站直播 {len(bilibili_channels)} 个）")
+                  f"自定义 {len(custom_channels)} 个 + B站直播 {len(bilibili_channels)} 个）")
             _fire_refresh_callbacks()
             # 关键事件入库（管理页日志可查）
             try:

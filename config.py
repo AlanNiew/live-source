@@ -142,8 +142,11 @@ PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'http://localhost:5002')
 # False 时回退全代理（分片也经本服务转发，兼容性兜底，B 站收紧分片防盗链时用）
 BILIBILI_DIRECT_SEGMENTS = os.environ.get('BILIBILI_DIRECT_SEGMENTS', 'true').lower() == 'true'
 
-# 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后）-> B站直播，其余兜底
-GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2, BILIBILI_GROUP_NAME: 3}
+# 自定义流分组名：sources 表 type=custom 的频道（外部工具转流进聚合，如抖音经 streamlink 转 HLS）
+CUSTOM_GROUP_NAME = "自定义"
+# 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视 -> 自定义（外部转流）-> B站直播，其余兜底
+GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2, CUSTOM_GROUP_NAME: 3,
+               BILIBILI_GROUP_NAME: 4}
 
 # B 站直播测试模式：开启时聚合跳过 hntv 官方源与公开源拉取，只收集 B 站直播频道
 # （测试 B 站接入期间启用，避免每次启动拉公开源+探测 70 频道拖慢重启；

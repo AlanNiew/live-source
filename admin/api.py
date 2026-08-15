@@ -24,8 +24,8 @@ admin_api.cache = None
 
 # 日志级别白名单（logs 端点过滤）
 _LOG_LEVELS = {'ERROR', 'WARNING', 'INFO'}
-# 源类型白名单（sources 端点）
-_SOURCE_TYPES = {'public', 'bilibili'}
+# 源类型白名单（sources 端点）；custom = 自定义流（外部工具转流，如抖音经 streamlink 转 HLS）
+_SOURCE_TYPES = {'public', 'bilibili', 'custom'}
 
 
 # ---------------------------------------------------------------- 鉴权
@@ -272,7 +272,7 @@ def sources():
     if request.method == 'GET':
         source_type = request.args.get('type')
         if source_type is not None and source_type not in _SOURCE_TYPES:
-            return jsonify({'error': 'type 必须为 public 或 bilibili'}), 400
+            return jsonify({'error': 'type 必须为 public、bilibili 或 custom'}), 400
         enabled = request.args.get('enabled')
         if enabled is not None and enabled not in ('0', '1'):
             return jsonify({'error': 'enabled 必须为 0 或 1'}), 400
@@ -312,11 +312,13 @@ def sources():
     name = (data.get('name') or '').strip()
     url = (data.get('url') or '').strip() or None
     if source_type not in _SOURCE_TYPES:
-        return jsonify({'error': 'type 必须为 public 或 bilibili'}), 400
+        return jsonify({'error': 'type 必须为 public、bilibili 或 custom'}), 400
     if not name:
         return jsonify({'error': 'name 不能为空'}), 400
-    if source_type == 'public' and not url:
-        return jsonify({'error': 'public 源必须提供 url'}), 400
+    if source_type in ('public', 'custom') and not url:
+        return jsonify({'error': f'{source_type} 源必须提供 url'}), 400
+    if source_type == 'custom' and not url.startswith(('http://', 'https://', 'rtmp://')):
+        return jsonify({'error': 'custom 源 url 必须以 http(s):// 或 rtmp:// 开头'}), 400
     if source_type == 'bilibili' and url is not None and not url.isdigit():
         return jsonify({'error': 'bilibili 源 url 必须为房间号数字'}), 400
     enabled = data.get('enabled', True)

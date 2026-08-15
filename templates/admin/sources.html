@@ -4,7 +4,7 @@
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
     <div class="page-title"><i class="bi bi-rss me-2 text-primary"></i>源管理</div>
-    <div class="text-secondary small">公开 m3u 源与 B 站房间的增删启停；变更后自动后台聚合</div>
+    <div class="text-secondary small">公开 m3u 源、B 站房间与自定义流的增删启停；变更后自动后台聚合</div>
   </div>
   <div class="d-flex gap-2">
     <button class="btn btn-soft btn-sm" id="importBtn" hidden><i class="bi bi-download me-1"></i>导入默认源</button>
@@ -17,7 +17,7 @@
 
 <div class="collapse mb-3" id="addCard">
   <div class="card">
-    <div class="card-header">新增源（公开 m3u 源 / B 站房间）</div>
+    <div class="card-header">新增源（公开 m3u 源 / B 站房间 / 自定义流）</div>
     <div class="card-body">
       <form class="row g-2 align-items-end" id="addForm">
         <div class="col-md-2">
@@ -25,11 +25,12 @@
           <select class="form-select" id="addType">
             <option value="public">public（公开 m3u 源）</option>
             <option value="bilibili">bilibili（B 站房间）</option>
+            <option value="custom">custom（自定义流，外部转流）</option>
           </select>
         </div>
         <div class="col-md-3">
           <label class="form-label small fw-semibold">名称</label>
-          <input class="form-control" id="addName" placeholder="如：iptv-org" required>
+          <input class="form-control" id="addName" placeholder="如：抖音-央视新闻" required>
         </div>
         <div class="col-md-4">
           <label class="form-label small fw-semibold">url（bilibili 填房间号）</label>
@@ -44,7 +45,9 @@
         </div>
       </form>
       <div class="form-text mt-2"><i class="bi bi-info-circle me-1"></i>
-        B 站源 url 填直播间号（如 8178490）；「config 默认」行为 config.py 种子值（只读），点「导入默认源」落库后可编辑。</div>
+        B 站源 url 填直播间号（如 8178490）；custom 填外部转流工具的 HLS 地址
+        （如 http://127.0.0.1:8080/douyin/index.m3u8，见 DOUYIN_LIVE.md）；
+        「config 默认」行为 config.py 种子值（只读），点「导入默认源」落库后可编辑。</div>
     </div>
   </div>
 </div>
@@ -69,6 +72,7 @@ const pageSize = 20;
 
 function typeBadge(t) {
   return t === 'public' ? '<span class="badge text-bg-primary">public</span>'
+       : t === 'custom' ? '<span class="badge text-bg-success">custom</span>'
                         : '<span class="badge text-bg-info">bilibili</span>';
 }
 
@@ -155,7 +159,8 @@ document.getElementById('addForm').addEventListener('submit', async (e) => {
   const url = document.getElementById('addUrl').value.trim();
   const sortOrder = Number(document.getElementById('addSort').value || 0);
   if (!name) { toast('名称不能为空', false); return; }
-  if (type === 'public' && !url) { toast('public 源必须填 url', false); return; }
+  if ((type === 'public' || type === 'custom') && !url) { toast('public/custom 源必须填 url', false); return; }
+  if (type === 'custom' && !/^(https?|rtmp):\/\//.test(url)) { toast('custom 源 url 必须以 http(s):// 或 rtmp:// 开头', false); return; }
   if (type === 'bilibili' && url && !/^\d+$/.test(url)) { toast('bilibili 源 url 必须是房间号数字', false); return; }
   const btn = e.target.querySelector('button[type=submit]');
   btnLoading(btn, true, '添加中…');
