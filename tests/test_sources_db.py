@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 import config
+import core.aggregator
 from admin import db
 from core.aggregator import AggregatorUtils
 from core.bilibili import BilibiliUtils
@@ -136,6 +137,55 @@ class PublicBaseUrlDbTest(unittest.TestCase):
         """未设置：回退 config PUBLIC_BASE_URL"""
         self.assertEqual(AggregatorUtils._public_base_url(),
                          config.PUBLIC_BASE_URL)
+
+
+class CustomChannelsTest(unittest.TestCase):
+    """自定义流频道（type=custom）：DB 读取 + 进聚合 + 去重"""
+
+    def setUp(self):
+        self.db_patcher = mock.patch('admin.db.ADMIN_DB_PATH',
+                                     os.path.join(tempfile.mkdtemp(), 't.db'))
+        self.db_patcher.start()
+        db.init_db()
+        # 隔离覆盖缓存，避免串扰
+        core.aggregator._override_cache.update({'expire': 0.0, 'data': {}})
+
+    def tearDown(self):
+        self.db_patcher.stop()
+
+    def test_get_custom_channels_from_db(self):
+        """启用且 url 非空的自定义源才返回，group=自定义"""
+        db.add_source('custom', '抖音-央视新闻', 'http://127.0.0.1:8080/cctv/index.m3u8')
+        db.add_source('custom', '禁用流', 'http://127.0.0.1:8080/x.m3u8', enabled=0)
+        channels = AggregatorUtils._get_custom_channels()
+        self.assertEqual(len(channels), 1)
+        self.assertEqual(channels[0]['name'], '抖音-央视新闻')
+        self.assertEqual(channels[0]['group_title'], '自定义')
+
+    def test_aggregate_includes_custom_group(self):
+        """自定义流进聚合：group-title=自定义，位于卫视之后、B站之前"""
+        db.add_source('custom', '抖音-央视新闻', 'http://127.0.0.1:8080/cctv/index.m3u8')
+        hntv = [{'name': '河南卫视', 'cid': 1, 'group_title': '河南卫视', 'url': 'http://h/1.m3u8'}]
+        public = [{'name': '北京卫视', 'tvg_name': '北京卫视', 'group_title': '卫视', 'url': 'http://w/1.m3u8'}]
+        bili = [{'name': 'B站台', 'tvg_name': 'B站台', 'group_title': 'B站直播', 'url': 'http://b/1.m3u8'}]
+        content = AggregatorUtils.aggregate_m3u(
+            hntv, public, bili, custom_channels=AggregatorUtils._get_custom_channels())
+        self.assertIn('group-title="自定义"', content)
+        self.assertIn('http://127.0.0.1:8080/cctv/index.m3u8', content)
+        # 顺序：卫视 < 自定义 < B站直播
+        self.assertLess(content.index('group-title="卫视"'),
+                        content.index('group-title="自定义"'))
+        self.assertLess(content.index('group-title="自定义"'),
+                        content.index('group-title="B站直播"'))
+
+    def test_custom_dedup_with_hntv(self):
+        """自定义流与官方同名：官方优先，自定义不覆盖"""
+        db.add_source('custom', '河南卫视', 'http://127.0.0.1:8080/hn.m3u8')
+        hntv = [{'name': '河南卫视', 'cid': 1, 'group_title': '河南卫视', 'url': 'http://h/1.m3u8'}]
+        content = AggregatorUtils.aggregate_m3u(
+            hntv, [], custom_channels=AggregatorUtils._get_custom_channels())
+        self.assertIn('http://h/1.m3u8', content)
+        self.assertNotIn('http://127.0.0.1:8080/hn.m3u8', content)
 
 
 if __name__ == '__main__':
