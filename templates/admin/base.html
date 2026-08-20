@@ -29,6 +29,34 @@
     .form-text { font-size: .78rem; }
     .page-title { font-size: 1.25rem; font-weight: 700; }
     .toast-container { position: fixed; top: 1rem; right: 1rem; z-index: 1090; }
+
+    /* ===== 移动端通用优化 ===== */
+    /* 超窄屏容器收紧边距 */
+    @media (max-width: 575.98px) { .container-fluid.content-x { padding: 0 .75rem !important; } }
+    /* 窄屏触控目标：按钮/分页/链接加大，便于手指点击 */
+    @media (max-width: 767.98px) {
+      .btn-sm, .btn-group-sm .btn, .navbar .nav-link { min-height: 40px; }
+      .form-control-sm, .input-group-sm .form-control { min-height: 40px; }
+      .btn-group-sm .btn { padding: .4rem .65rem; }
+    }
+    /* 长链接/长文本：窄屏单行省略 + 悬浮全文，桌面保留可换行（可读性） */
+    .text-ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    @media (min-width: 768px) {
+      .text-ellipsis-md { white-space: normal; overflow-wrap: anywhere; }
+    }
+    /* 点击可复制的链接样式 */
+    .copyable { cursor: pointer; text-decoration: none; }
+    .copyable:hover { text-decoration: underline; }
+    .copyable .bi { font-size: .8em; margin-left: 2px; opacity: .75; }
+    /* 移动端 Toast：底部居中全宽，避免被顶部状态栏遮挡 */
+    @media (max-width: 575.98px) {
+      .toast-container { top: auto; bottom: 1rem; left: .75rem; right: .75rem; }
+      .toast-container .toast { width: 100%; max-width: none; }
+    }
+    /* 窄屏 modal 全宽贴边，便于操作 */
+    @media (max-width: 575.98px) {
+      .modal-dialog { margin: .5rem; }
+    }
   </style>
 </head>
 <body>
@@ -57,7 +85,7 @@
 <!-- 右上角 Toast 容器 -->
 <div class="toast-container" id="toastBox"></div>
 
-<div class="container-fluid px-4 pb-5">
+<div class="container-fluid content-x px-4 pb-5">
   {% block content %}{% endblock %}
 </div>
 
@@ -223,6 +251,37 @@ document.getElementById('formModal').addEventListener('hidden.bs.modal', () => {
 /* 空状态行 */
 function emptyRow(cols, text = '暂无数据', icon = 'bi-inbox') {
   return `<tr><td colspan="${cols}"><div class="empty-state"><i class="bi ${icon}"></i>${esc(text)}</div></td></tr>`;
+}
+
+/* 复制文本到剪贴板（带移动端降级 + 提示）；返回是否成功 */
+async function copyText(text, label = '已复制') {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // 非 HTTPS 降级：临时 textarea + execCommand
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toast(label);
+    return true;
+  } catch (e) {
+    toast('复制失败', false);
+    return false;
+  }
+}
+
+/* 把某 DOM 元素渲染成「可点击复制」的省略链接：
+   el: 元素，text: 完整文本，maxW: 最大宽度(如 220px) */
+function makeCopyable(el, text) {
+  el.classList.add('copyable');
+  el.title = '点击复制：' + text;
+  el.addEventListener('click', () => copyText(text));
 }
 
 /* 退出登录 */

@@ -83,7 +83,8 @@ async function load() {
         <td class="text-secondary small">${r.id ?? '—'}</td>
         <td>${typeBadge(r.type)}${r.config_default ? ' <span class="badge text-bg-secondary">config 默认</span>' : ''}</td>
         <td class="fw-semibold">${esc(r.name)}</td>
-        <td class="text-break small text-secondary">${esc(r.url || '—')}</td>
+        <td class="text-ellipsis text-ellipsis-md small text-secondary"
+            ${r.url ? `data-copy="${esc(r.url)}"` : ''}>${esc(r.url || '—')}<i class="bi bi-copy d-md-none float-end mt-1 opacity-50"></i></td>
         <td>${esc(r.sort_order)}</td>
         <td>
           <div class="form-check form-switch mb-0">
@@ -106,6 +107,10 @@ async function load() {
         await api(`/api/admin/sources/${cb.dataset.id}`, 'PUT', {enabled: cb.checked});
         toast(cb.checked ? '已启用，正在后台刷新聚合' : '已禁用，正在后台刷新聚合');
       } catch (err) { toast(err.message, false); cb.checked = !cb.checked; }
+    }));
+
+    tb.querySelectorAll('[data-copy]').forEach(td => td.addEventListener('click', () => {
+      copyText(td.dataset.copy);
     }));
 
     tb.querySelectorAll('[data-act=edit]').forEach(btn => btn.addEventListener('click', async () => {

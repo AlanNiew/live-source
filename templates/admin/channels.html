@@ -82,7 +82,8 @@ async function load() {
           <div class="text-secondary small">${esc(r.key)}</div>
         </td>
         <td><span class="badge text-bg-light border">${esc(r.group)}</span></td>
-        <td class="text-break small text-secondary">${esc(r.url || '—')}</td>
+        <td class="text-ellipsis text-ellipsis-md small text-secondary"
+            ${r.url ? `data-copy="${esc(r.url)}"` : ''}>${esc(r.url || '—')}<i class="bi bi-copy d-md-none float-end mt-1 opacity-50"></i></td>
         <td>${overrideBadge(r.override)}</td>
         <td>
           <div class="form-check form-switch mb-0">
@@ -107,6 +108,10 @@ async function load() {
                          : `已禁用「${cb.dataset.key}」，正在后台刷新播放列表`);
         load();
       } catch (err) { toast(err.message, false); cb.checked = !cb.checked; }
+    }));
+
+    tb.querySelectorAll('[data-copy]').forEach(td => td.addEventListener('click', () => {
+      copyText(td.dataset.copy);
     }));
 
     tb.querySelectorAll('[data-act=edit]').forEach(btn => btn.addEventListener('click', async () => {

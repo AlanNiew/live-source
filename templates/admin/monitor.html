@@ -55,7 +55,7 @@
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-hover mb-0">
-            <thead><tr><th>时间</th><th>health</th><th>m3u</th><th>epg</th><th>频道数</th><th>结果</th></tr></thead>
+            <thead><tr><th>时间</th><th>health</th><th>m3u</th><th class="d-none d-md-table-cell">epg</th><th>频道数</th><th>结果</th></tr></thead>
             <tbody id="historyBody"><tr><td colspan="6" class="text-center text-secondary">加载中…</td></tr></tbody>
           </table>
         </div>
@@ -75,7 +75,7 @@
       <div class="card-body p-0">
         <div class="table-responsive" style="max-height: 520px; overflow-y: auto;">
           <table class="table table-hover mb-0">
-            <thead class="sticky-top bg-white"><tr><th>时间</th><th>分组</th><th>频道</th><th>轮次</th><th>结果</th></tr></thead>
+            <thead class="sticky-top bg-white"><tr><th>时间</th><th>分组</th><th>频道</th><th class="d-none d-md-table-cell">轮次</th><th>结果</th></tr></thead>
             <tbody id="streamsBody"><tr><td colspan="5" class="text-center text-secondary">加载中…</td></tr></tbody>
           </table>
         </div>
@@ -120,7 +120,7 @@ async function loadHistory() {
         <td class="text-nowrap small">${esc(r.ts)}</td>
         <td>${r.health_ok ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-danger"></i>'}</td>
         <td>${r.m3u_ok ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-danger"></i>'}</td>
-        <td>${r.epg_ok ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-danger"></i>'}</td>
+        <td class="d-none d-md-table-cell">${r.epg_ok ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-danger"></i>'}</td>
         <td>${esc(r.channel_count)}</td>
         <td><span class="badge text-bg-${r.overall ? 'success' : 'danger'}">${r.overall ? 'OK' : 'FAIL'}</span></td>
       </tr>`).join('') : emptyRow(6, '暂无历史', 'bi-clock-history');
@@ -138,7 +138,7 @@ async function loadStreams() {
         <td class="text-nowrap small">${esc(r.ts)}</td>
         <td><span class="badge text-bg-light border">${esc(r.group_name)}</span></td>
         <td class="fw-semibold">${esc(r.channel_name)}</td>
-        <td class="text-secondary small">${esc(r.round_id)}</td>
+        <td class="text-secondary small d-none d-md-table-cell">${esc(r.round_id)}</td>
         <td><span class="badge text-bg-${r.ok ? 'success' : 'danger'}">${r.ok ? '可达' : '不可达'}</span></td>
       </tr>`).join('') : emptyRow(5, '暂无探测记录', 'bi-list-check');
     renderPager(document.getElementById('streamsPager'), data, p => { streamsPage = p; loadStreams(); });
