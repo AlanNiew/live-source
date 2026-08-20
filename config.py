@@ -50,8 +50,8 @@ PUBLIC_M3U_SOURCES = [
 
 # 聚合刷新间隔（秒）——公开源部分每 6 小时刷新一次（含探测过滤）
 AGGREGATE_REFRESH_INTERVAL = 6 * 60 * 60
-# HNTV 官方源刷新间隔（秒）——官方接口签名有效期约 4h，3h 刷新留 1h 余量，保持签名新鲜
-OFFICIAL_REFRESH_INTERVAL = 3 * 60 * 60
+# HNTV 官方源刷新间隔（秒）——官方接口签名有效期约 4h，2h 刷新留 2h 余量，保持签名新鲜
+OFFICIAL_REFRESH_INTERVAL = 2 * 60 * 60
 
 # 聚合时探测过滤不可达源（连续两轮失败才丢弃，避免源瞬时抖动被误杀）
 FILTER_UNREACHABLE = True
