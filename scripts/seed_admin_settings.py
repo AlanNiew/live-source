@@ -23,8 +23,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 from admin import db  # noqa: E402  导入顺序：先修正 sys.path
-from config import (GROUP_HEALTH_RATIOS, LOG_KEEP_DAYS, MONITOR_HISTORY_KEEP,
-                    STREAM_FAIL_LIMIT, STREAM_HISTORY_KEEP)  # noqa: E402
+from config import (AGGREGATE_REFRESH_INTERVAL, CHECK_INTERVAL,
+                    CHECK_WINDOW_END_HOUR, CHECK_WINDOW_START_HOUR,
+                    GROUP_HEALTH_RATIOS, LOG_KEEP_DAYS, MONITOR_HISTORY_KEEP,
+                    OFFICIAL_REFRESH_INTERVAL, STARTUP_DELAY,
+                    STREAM_CHECK_CONCURRENCY, STREAM_CHECK_INTERVAL,
+                    STREAM_FAIL_LIMIT, STREAM_HISTORY_KEEP, STREAM_PROBE_TIMEOUT)  # noqa: E402
 
 # key -> (描述, 默认值, 存储格式)
 DEFAULTS = [
@@ -39,6 +43,16 @@ DEFAULTS = [
     ('stream_history_keep', '流探测历史保留条数',
      STREAM_HISTORY_KEEP, 'int'),
     ('log_keep_days', '日志保留天数', LOG_KEEP_DAYS, 'int'),
+    # ---- 定时任务周期（秒）与监控探测参数（下一轮生效）----
+    ('aggregate_refresh_interval', '公开源聚合刷新周期（秒）', AGGREGATE_REFRESH_INTERVAL, 'int'),
+    ('official_refresh_interval', '官方源刷新周期（秒）', OFFICIAL_REFRESH_INTERVAL, 'int'),
+    ('monitor_interval', '常规健康检测周期（秒）', CHECK_INTERVAL, 'int'),
+    ('stream_check_interval', '全量流探测周期（秒）', STREAM_CHECK_INTERVAL, 'int'),
+    ('monitor_window_start', '检测时段开始小时（GMT+8，含）', CHECK_WINDOW_START_HOUR, 'int'),
+    ('monitor_window_end', '检测时段结束小时（GMT+8，不含）', CHECK_WINDOW_END_HOUR, 'int'),
+    ('startup_delay', '监控首次启动延迟（秒）', STARTUP_DELAY, 'int'),
+    ('stream_check_concurrency', '流探测并发数', STREAM_CHECK_CONCURRENCY, 'int'),
+    ('stream_probe_timeout', '单流探测超时（秒）', STREAM_PROBE_TIMEOUT, 'int'),
 ]
 
 

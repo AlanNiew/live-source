@@ -52,6 +52,12 @@ class CheckUtils:
         return GROUP_HEALTH_RATIOS
 
     @staticmethod
+    def _stream_concurrency():
+        """流探测并发数：settings 优先，config 兜底"""
+        from admin import db
+        return db.get_effective_int('stream_check_concurrency', STREAM_CHECK_CONCURRENCY)
+
+    @staticmethod
     def check_health():
         """
         检测服务存活：/health 返回 200 且 status=healthy
@@ -224,6 +230,8 @@ class CheckUtils:
         """
         items = CheckUtils.fetch_m3u_groups()
         bad_names = defaultdict(list)  # group -> 不可达频道名列表（供日志与邮件明细）
+        # 并发数动态化：settings 优先，config 兜底（下一轮生效）
+        concurrency = CheckUtils._stream_concurrency()
         if not items:
             current = "FAIL"
             _logger.info("流探测异常：聚合列表拉取失败或无流地址")
@@ -234,7 +242,7 @@ class CheckUtils:
             }]
         else:
             # 并发探测所有流（严格判定：仅 200/206 可达，与聚合过滤的宽松口径区分）
-            with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
                 results = list(executor.map(probe_stream, [u for u, _, _ in items]))
             # 落库：本轮流探测明细（每频道一条，整轮批量写入，失败静默不影响检测）
             try:

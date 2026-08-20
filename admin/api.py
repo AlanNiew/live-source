@@ -541,15 +541,29 @@ _SETTING_KEYS = {
     'public_base_url': 'str',
     'alert_enabled': 'bool',
     'alert_recipients': 'str',
+    # 定时任务周期（秒）与监控探测参数（下一轮生效）
+    'aggregate_refresh_interval': 'int',
+    'official_refresh_interval': 'int',
+    'monitor_interval': 'int',
+    'stream_check_interval': 'int',
+    'monitor_window_start': 'int',
+    'monitor_window_end': 'int',
+    'startup_delay': 'int',
+    'stream_check_concurrency': 'int',
+    'stream_probe_timeout': 'int',
 }
 
 
 def _settings_effective():
     """全部设置的有效值（DB 优先、config 兜底）"""
     from admin import db
-    from config import (GROUP_HEALTH_RATIOS, LOG_KEEP_DAYS, MIN_CHANNEL_COUNT,
-                        MONITOR_HISTORY_KEEP, PUBLIC_BASE_URL, STREAM_FAIL_LIMIT,
-                        STREAM_HISTORY_KEEP)
+    from config import (AGGREGATE_REFRESH_INTERVAL, CHECK_INTERVAL,
+                        CHECK_WINDOW_END_HOUR, CHECK_WINDOW_START_HOUR,
+                        GROUP_HEALTH_RATIOS, LOG_KEEP_DAYS, MIN_CHANNEL_COUNT,
+                        MONITOR_HISTORY_KEEP, OFFICIAL_REFRESH_INTERVAL,
+                        PUBLIC_BASE_URL, STARTUP_DELAY, STREAM_CHECK_CONCURRENCY,
+                        STREAM_CHECK_INTERVAL, STREAM_FAIL_LIMIT,
+                        STREAM_HISTORY_KEEP, STREAM_PROBE_TIMEOUT)
     return {
         'bilibili_only_mode': AggregatorUtils.is_bilibili_only_mode(),
         'min_channel_count': db.get_effective_int('min_channel_count', MIN_CHANNEL_COUNT),
@@ -564,6 +578,22 @@ def _settings_effective():
         'public_base_url': AggregatorUtils._public_base_url(),
         'alert_enabled': db.is_alert_enabled(default=True),
         'alert_recipients': db.get_effective_str('alert_recipients', None) or '',
+        'aggregate_refresh_interval': db.get_effective_int(
+            'aggregate_refresh_interval', AGGREGATE_REFRESH_INTERVAL),
+        'official_refresh_interval': db.get_effective_int(
+            'official_refresh_interval', OFFICIAL_REFRESH_INTERVAL),
+        'monitor_interval': db.get_effective_int('monitor_interval', CHECK_INTERVAL),
+        'stream_check_interval': db.get_effective_int(
+            'stream_check_interval', STREAM_CHECK_INTERVAL),
+        'monitor_window_start': db.get_effective_int(
+            'monitor_window_start', CHECK_WINDOW_START_HOUR),
+        'monitor_window_end': db.get_effective_int(
+            'monitor_window_end', CHECK_WINDOW_END_HOUR),
+        'startup_delay': db.get_effective_int('startup_delay', STARTUP_DELAY),
+        'stream_check_concurrency': db.get_effective_int(
+            'stream_check_concurrency', STREAM_CHECK_CONCURRENCY),
+        'stream_probe_timeout': db.get_effective_int(
+            'stream_probe_timeout', STREAM_PROBE_TIMEOUT),
     }
 
 
@@ -588,7 +618,15 @@ def settings():
             if not isinstance(value, bool):
                 return jsonify({'error': f'{key} 必须为布尔值'}), 400
         elif kind == 'int':
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            if isinstance(value, bool) or not isinstance(value, int):
+                return jsonify({'error': f'{key} 必须为整数'}), 400
+            if key == 'monitor_window_start':
+                if not (0 <= value <= 23):
+                    return jsonify({'error': f'{key} 必须在 0-23 之间（GMT+8 小时）'}), 400
+            elif key == 'monitor_window_end':
+                if not (1 <= value <= 24):
+                    return jsonify({'error': f'{key} 必须在 1-24 之间（GMT+8 小时）'}), 400
+            elif value < 1:
                 return jsonify({'error': f'{key} 必须为不小于 1 的整数'}), 400
         elif kind == 'str':
             if not isinstance(value, str):

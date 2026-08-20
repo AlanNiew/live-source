@@ -61,7 +61,8 @@ class AdminWebTest(unittest.TestCase):
             '/monitor': ['监控', '健康检测历史', '流探测明细', '仅看不可达'],
             '/logs': ['日志', '全部级别', '关键词'],
             '/settings': ['设置', 'min_channel_count', 'public_base_url', 'alert_enabled',
-                           'alert_recipients'],
+                           'alert_recipients', 'aggregate_refresh_interval',
+                           'stream_probe_timeout', '定时周期与探测参数'],
         }
         for page, expects in markers.items():
             resp = self.client.get(f'/admin{page}')

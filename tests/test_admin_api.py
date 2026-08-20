@@ -456,6 +456,39 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/admin/settings').get_json()
                          ['effective']['alert_recipients'], '')
 
+    def test_settings_intervals_validate(self):
+        """周期/探测参数（次要项）：写入与校验"""
+        self._login()
+        resp = self.client.put('/api/admin/settings', json={
+            'aggregate_refresh_interval': 1800,
+            'official_refresh_interval': 900,
+            'monitor_interval': 120,
+            'stream_check_interval': 300,
+            'monitor_window_start': 7,
+            'monitor_window_end': 23,
+            'stream_check_concurrency': 5,
+            'stream_probe_timeout': 4,
+        })
+        self.assertEqual(resp.status_code, 200)
+        eff = resp.get_json()['effective']
+        self.assertEqual(eff['aggregate_refresh_interval'], 1800)
+        self.assertEqual(eff['official_refresh_interval'], 900)
+        self.assertEqual(eff['monitor_interval'], 120)
+        self.assertEqual(eff['stream_check_interval'], 300)
+        self.assertEqual(eff['monitor_window_start'], 7)
+        self.assertEqual(eff['monitor_window_end'], 23)
+        self.assertEqual(eff['stream_check_concurrency'], 5)
+        self.assertEqual(eff['stream_probe_timeout'], 4)
+        # 非法：小于下限 / 非整数 / 窗口越界
+        self.assertEqual(self.client.put('/api/admin/settings',
+                                         json={'monitor_interval': 0}).status_code, 400)
+        self.assertEqual(self.client.put('/api/admin/settings',
+                                         json={'aggregate_refresh_interval': 'x'}).status_code, 400)
+        self.assertEqual(self.client.put('/api/admin/settings',
+                                         json={'monitor_window_start': -1}).status_code, 400)
+        self.assertEqual(self.client.put('/api/admin/settings',
+                                         json={'monitor_window_end': 25}).status_code, 400)
+
 
 if __name__ == '__main__':
     unittest.main()

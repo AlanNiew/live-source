@@ -4,7 +4,7 @@
 <div class="d-flex align-items-center justify-content-between mb-3">
   <div>
     <div class="page-title"><i class="bi bi-gear me-2 text-primary"></i>设置</div>
-    <div class="text-secondary small">运行时配置：DB 优先、config/env 兜底，保存后对后续轮次即时生效</div>
+    <div class="text-secondary small">运行时配置：DB 优先、config/env 兜底。周期/时段改动**下一轮生效**，无需重启</div>
   </div>
 </div>
 
@@ -20,7 +20,7 @@
             <span class="badge text-bg-light border setting-tag" data-key="min_channel_count">config 默认</span>
           </label>
           <input type="number" min="1" class="form-control" id="min_channel_count">
-          <div class="form-text">常规检测：频道数低于此值判定 FAIL（测试模式建议 1，正式模式 30）。</div>
+          <div class="form-text">频道数低于此值判定 FAIL（测试模式建议 1，正式模式 30）。</div>
         </div>
         <div class="mb-3">
           <label class="form-label small fw-semibold d-flex justify-content-between">
@@ -40,10 +40,8 @@
         </div>
       </div>
     </div>
-  </div>
 
-  <div class="col-lg-6">
-    <div class="card mb-3">
+    <div class="card mt-3">
       <div class="card-header"><i class="bi bi-database me-1"></i>保留策略</div>
       <div class="card-body">
         <div class="row g-3">
@@ -71,8 +69,10 @@
         </div>
       </div>
     </div>
+  </div>
 
-    <div class="card">
+  <div class="col-lg-6">
+    <div class="card h-100">
       <div class="card-header"><i class="bi bi-toggle-on me-1"></i>服务地址与开关</div>
       <div class="card-body">
         <div class="mb-3">
@@ -105,10 +105,76 @@
             <span class="badge text-bg-light border setting-tag" data-key="alert_recipients">config 默认</span>
           </label>
           <input type="text" class="form-control" id="alert_recipients" placeholder="a@qq.com, b@163.com">
-          <div class="form-text">多个邮箱用英文逗号分隔，全部作为收件人（可含任意邮箱服务商）。
-            留空 = 收件人为发送账号自身（.env 的 email）。发送账号/授权码始终用 .env 配置。</div>
+          <div class="form-text">多个邮箱用英文逗号分隔，全部作为收件人。留空 = 收件人为发送账号自身。</div>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-3">
+  <div class="card-header"><i class="bi bi-stopwatch me-1"></i>定时周期与探测参数（次要项，统一表格管理 · 下一轮生效）</div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <thead><tr><th style="width:34%">配置项</th><th style="width:16%">来源</th><th>值（可编辑）</th><th>单位 / 说明</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="fw-semibold">公开源聚合周期 <code>aggregate_refresh_interval</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="aggregate_refresh_interval">config 默认</span></td>
+            <td><input type="number" min="60" class="form-control form-control-sm w-50" id="aggregate_refresh_interval"></td>
+            <td class="text-secondary small">秒 · 公开源全量拉取+探测</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">官方源刷新周期 <code>official_refresh_interval</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="official_refresh_interval">config 默认</span></td>
+            <td><input type="number" min="60" class="form-control form-control-sm w-50" id="official_refresh_interval"></td>
+            <td class="text-secondary small">秒 · hn签名刷新（<4h 有效）</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">常规检测周期 <code>monitor_interval</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="monitor_interval">config 默认</span></td>
+            <td><input type="number" min="10" class="form-control form-control-sm w-50" id="monitor_interval"></td>
+            <td class="text-secondary small">秒</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">全量流探测周期 <code>stream_check_interval</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="stream_check_interval">config 默认</span></td>
+            <td><input type="number" min="60" class="form-control form-control-sm w-50" id="stream_check_interval"></td>
+            <td class="text-secondary small">秒</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">检测时段开始 <code>monitor_window_start</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="monitor_window_start">config 默认</span></td>
+            <td><input type="number" min="0" max="23" class="form-control form-control-sm w-50" id="monitor_window_start"></td>
+            <td class="text-secondary small">GMT+8 小时（含）</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">检测时段结束 <code>monitor_window_end</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="monitor_window_end">config 默认</span></td>
+            <td><input type="number" min="1" max="24" class="form-control form-control-sm w-50" id="monitor_window_end"></td>
+            <td class="text-secondary small">GMT+8 小时（不含）</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">首次检测延迟 <code>startup_delay</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="startup_delay">config 默认</span></td>
+            <td><input type="number" min="1" class="form-control form-control-sm w-50" id="startup_delay"></td>
+            <td class="text-secondary small">秒 · 启动后等聚合首轮完成再检测</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">流探测并发数 <code>stream_check_concurrency</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="stream_check_concurrency">config 默认</span></td>
+            <td><input type="number" min="1" class="form-control form-control-sm w-50" id="stream_check_concurrency"></td>
+            <td class="text-secondary small">并发探测线程数</td>
+          </tr>
+          <tr>
+            <td class="fw-semibold">单流探测超时 <code>stream_probe_timeout</code></td>
+            <td><span class="badge text-bg-light border setting-tag" data-key="stream_probe_timeout">config 默认</span></td>
+            <td><input type="number" min="1" class="form-control form-control-sm w-50" id="stream_probe_timeout"></td>
+            <td class="text-secondary small">秒</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -131,37 +197,62 @@ function markTags(settings) {
   });
 }
 
+/* 对每个 key：读入 effective 或回显 DB 已入库值 */
+function setVal(key, val) {
+  const el = document.getElementById(key);
+  if (el) el.value = val;
+}
+
 async function loadSettings() {
   try {
     const data = await api('/api/admin/settings');
     const e = data.effective;
-    document.getElementById('min_channel_count').value = e.min_channel_count;
-    document.getElementById('stream_fail_limit').value = e.stream_fail_limit;
-    document.getElementById('log_keep_days').value = e.log_keep_days;
-    document.getElementById('monitor_history_keep').value = e.monitor_history_keep;
-    document.getElementById('stream_history_keep').value = e.stream_history_keep;
-    document.getElementById('public_base_url').value = e.public_base_url || '';
-    document.getElementById('group_health_ratios').value =
-      JSON.stringify(e.group_health_ratios, null, 2);
+    setVal('min_channel_count', e.min_channel_count);
+    setVal('stream_fail_limit', e.stream_fail_limit);
+    setVal('log_keep_days', e.log_keep_days);
+    setVal('monitor_history_keep', e.monitor_history_keep);
+    setVal('stream_history_keep', e.stream_history_keep);
+    setVal('public_base_url', e.public_base_url || '');
+    setVal('group_health_ratios', JSON.stringify(e.group_health_ratios, null, 2));
     document.getElementById('bilibili_only_mode').checked = !!e.bilibili_only_mode;
     document.getElementById('alert_enabled').checked = !!e.alert_enabled;
-    document.getElementById('alert_recipients').value = e.alert_recipients || '';
+    setVal('alert_recipients', e.alert_recipients || '');
+    // 表格次要项
+    setVal('aggregate_refresh_interval', e.aggregate_refresh_interval);
+    setVal('official_refresh_interval', e.official_refresh_interval);
+    setVal('monitor_interval', e.monitor_interval);
+    setVal('stream_check_interval', e.stream_check_interval);
+    setVal('monitor_window_start', e.monitor_window_start);
+    setVal('monitor_window_end', e.monitor_window_end);
+    setVal('startup_delay', e.startup_delay);
+    setVal('stream_check_concurrency', e.stream_check_concurrency);
+    setVal('stream_probe_timeout', e.stream_probe_timeout);
     markTags(data.settings || {});
   } catch (err) { toast(err.message, false); }
 }
 
 document.getElementById('settingsForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const num = id => Number(document.getElementById(id).value);
   const body = {
-    min_channel_count: Number(document.getElementById('min_channel_count').value),
-    stream_fail_limit: Number(document.getElementById('stream_fail_limit').value),
-    log_keep_days: Number(document.getElementById('log_keep_days').value),
-    monitor_history_keep: Number(document.getElementById('monitor_history_keep').value),
-    stream_history_keep: Number(document.getElementById('stream_history_keep').value),
+    min_channel_count: num('min_channel_count'),
+    stream_fail_limit: num('stream_fail_limit'),
+    log_keep_days: num('log_keep_days'),
+    monitor_history_keep: num('monitor_history_keep'),
+    stream_history_keep: num('stream_history_keep'),
     public_base_url: document.getElementById('public_base_url').value.trim(),
     bilibili_only_mode: document.getElementById('bilibili_only_mode').checked,
     alert_enabled: document.getElementById('alert_enabled').checked,
     alert_recipients: document.getElementById('alert_recipients').value.trim(),
+    aggregate_refresh_interval: num('aggregate_refresh_interval'),
+    official_refresh_interval: num('official_refresh_interval'),
+    monitor_interval: num('monitor_interval'),
+    stream_check_interval: num('stream_check_interval'),
+    monitor_window_start: num('monitor_window_start'),
+    monitor_window_end: num('monitor_window_end'),
+    startup_delay: num('startup_delay'),
+    stream_check_concurrency: num('stream_check_concurrency'),
+    stream_probe_timeout: num('stream_probe_timeout'),
   };
   try {
     body.group_health_ratios = JSON.parse(document.getElementById('group_health_ratios').value);

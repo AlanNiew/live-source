@@ -64,7 +64,11 @@ def schedule_aggregate_refresh():
                     _logger.info("聚合 m3u 已刷新（公开源）")
                 else:
                     _logger.info("公开源聚合跳过或失败（详见上方聚合日志）")
-                time.sleep(AGGREGATE_REFRESH_INTERVAL)
+                # 周期动态化：每轮睡前重读 settings（下一轮生效，无需重启）
+                from admin import db
+                interval = db.get_effective_int(
+                    'aggregate_refresh_interval', AGGREGATE_REFRESH_INTERVAL)
+                time.sleep(interval)
             except Exception:
                 _logger.exception("定时刷新聚合 m3u 出错")
                 time.sleep(60)  # 出错后等 1 分钟再试，避免狂跑
@@ -86,7 +90,11 @@ def schedule_aggregate_refresh():
                     _logger.info("官方源已刷新")
                 else:
                     _logger.info("官方源刷新跳过或失败（详见上方聚合日志）")
-                time.sleep(OFFICIAL_REFRESH_INTERVAL)
+                # 周期动态化：每轮睡前重读 settings（下一轮生效）
+                from admin import db
+                interval = db.get_effective_int(
+                    'official_refresh_interval', OFFICIAL_REFRESH_INTERVAL)
+                time.sleep(interval)
             except Exception:
                 _logger.exception("官方源刷新出错")
                 time.sleep(60)

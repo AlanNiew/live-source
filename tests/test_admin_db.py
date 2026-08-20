@@ -290,6 +290,16 @@ class SettingsEffectiveTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['module'], 'main')
 
+    def test_scheduler_interval_dynamic(self):
+        """MonitorScheduler 周期/时段读 DB 设置（下一轮生效、无重启）"""
+        from monitoring.scheduler import MonitorScheduler
+        db.set_setting('monitor_interval', '123')
+        db.set_setting('stream_check_interval', '456')
+        db.set_setting('monitor_window_start', '7')
+        self.assertEqual(MonitorScheduler._monitor_interval(), 123)
+        self.assertEqual(MonitorScheduler._stream_check_interval(), 456)
+        self.assertEqual(MonitorScheduler._window_params()['start_hour'], 7)
+
     def test_alert_disabled_skips_send(self):
         """alert_enabled=false：send_alert 入口直接跳过，不加载发送模块"""
         from monitoring.alerts import AlertUtils
