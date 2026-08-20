@@ -83,14 +83,6 @@
           <input type="url" class="form-control" id="public_base_url" placeholder="http://服务器IP:15002">
           <div class="form-text">B 站频道 URL 由它生成；播放器/盒子必须能访问。</div>
         </div>
-        <div class="form-check form-switch mb-2">
-          <input class="form-check-input" type="checkbox" id="bilibili_only_mode">
-          <label class="form-check-label" for="bilibili_only_mode">
-            B 站测试模式 <code>bilibili_only_mode</code>
-            <span class="badge text-bg-light border setting-tag" data-key="bilibili_only_mode">config 默认</span>
-          </label>
-          <div class="form-text">开启：聚合只收集 B 站直播（跳过 hntv/公开源）。调度线程布局仍按启动时 env 定死。</div>
-        </div>
         <div class="form-check form-switch">
           <input class="form-check-input" type="checkbox" id="alert_enabled">
           <label class="form-check-label" for="alert_enabled">
@@ -214,7 +206,6 @@ async function loadSettings() {
     setVal('stream_history_keep', e.stream_history_keep);
     setVal('public_base_url', e.public_base_url || '');
     setVal('group_health_ratios', JSON.stringify(e.group_health_ratios, null, 2));
-    document.getElementById('bilibili_only_mode').checked = !!e.bilibili_only_mode;
     document.getElementById('alert_enabled').checked = !!e.alert_enabled;
     setVal('alert_recipients', e.alert_recipients || '');
     // 表格次要项
@@ -241,7 +232,6 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
     monitor_history_keep: num('monitor_history_keep'),
     stream_history_keep: num('stream_history_keep'),
     public_base_url: document.getElementById('public_base_url').value.trim(),
-    bilibili_only_mode: document.getElementById('bilibili_only_mode').checked,
     alert_enabled: document.getElementById('alert_enabled').checked,
     alert_recipients: document.getElementById('alert_recipients').value.trim(),
     aggregate_refresh_interval: num('aggregate_refresh_interval'),

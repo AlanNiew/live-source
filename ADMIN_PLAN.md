@@ -131,7 +131,7 @@ GET /api/admin/logs                        ?level=&q=&page=
 
 # 设置
 GET /api/admin/settings
-PUT /api/admin/settings                    {bilibili_only_mode?}
+PUT /api/admin/settings                    {阈值/周期/开关等，见「设置语义」}
 ```
 
 **鉴权**：管理 API 全部校验 `session['admin']`；`.env` 新增 `ADMIN_PASSWORD`（默认空 = 管理界面禁用，安全默认）。
@@ -176,12 +176,13 @@ PUT /api/admin/settings                    {bilibili_only_mode?}
 - PUT body 三字段全部可选、可组合；`enabled=false` 聚合时跳过，改分组/改名仅影响输出
 - 变更后自动 `request_async_refresh()` + 清播放列表缓存
 
-**设置语义**：运行时设置「DB 优先、config 兜底」，支持键：
-`bilibili_only_mode`(bool) / `min_channel_count`(int) / `stream_fail_limit`(int) /
-`monitor_history_keep`(int) / `stream_history_keep`(int) / `log_keep_days`(int) /
-`group_health_ratios`(JSON，组名->0~1) / `public_base_url`(str，B 站频道 URL 基础地址) /
-`alert_enabled`(bool，false 时 send_alert 整体静默)；对后续聚合/监控轮次即时生效（调度线程布局按启动时 env 定死）。
-初始化脚本 `scripts/seed_admin_settings.py`（幂等，`--reset` 覆盖）；密钥类（API_TOKEN/email 等）不落库，保持 .env。
+**设置语义**：运行时设置「DB 优先、config 兜底」，支持键（详见「设置」页）：
+`min_channel_count`(int) / `stream_fail_limit`(int) / `monitor_history_keep`(int) /
+`stream_history_keep`(int) / `log_keep_days`(int) / `group_health_ratios`(JSON，组名->0~1) /
+`public_base_url`(str，B 站频道 URL 基础地址) / `alert_enabled`(bool) / `alert_recipients`(str，多邮箱抄送) /
+`aggregate_refresh_interval` / `official_refresh_interval` / `monitor_interval` / `stream_check_interval`(秒)/`monitor_window_start` / `monitor_window_end`(小时)/ `startup_delay`(秒)/`stream_check_concurrency` / `stream_probe_timeout`；
+对后续聚合/监控轮次生效（周期类**下一轮生效**）。
+初始化脚本 `scripts/seed_admin_settings.py`（幂等，`--reset` 覆盖）；密钥类（API_TOKEN/email 等）与 `bilibili_only_mode`（部署级线程开关，仅 .env）不落库/不在配置页管理。
 
 ---
 

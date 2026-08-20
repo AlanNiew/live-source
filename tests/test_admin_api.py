@@ -369,18 +369,18 @@ class AdminApiTest(unittest.TestCase):
     # ------------------------------------------------------------ 设置
 
     def test_settings(self):
+        """设置 API：读写/回显/空 body 与非法值校验（用合法键 min_channel_count 走流程）"""
         self._login()
         data = self.client.get('/api/admin/settings').get_json()
-        self.assertEqual(data['effective']['bilibili_only_mode'],
-                         core.aggregator.BILIBILI_ONLY_MODE)
-        resp = self.client.put('/api/admin/settings', json={'bilibili_only_mode': False})
+        self.assertTrue('min_channel_count' in data['effective'])
+        resp = self.client.put('/api/admin/settings', json={'min_channel_count': 40})
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse(resp.get_json()['effective']['bilibili_only_mode'])
+        self.assertEqual(resp.get_json()['effective']['min_channel_count'], 40)
         data = self.client.get('/api/admin/settings').get_json()
-        self.assertEqual(data['settings']['bilibili_only_mode'], 'false')
+        self.assertEqual(data['settings']['min_channel_count'], '40')
         self.assertEqual(self.client.put('/api/admin/settings', json={}).status_code, 400)
         self.assertEqual(self.client.put('/api/admin/settings',
-                                         json={'bilibili_only_mode': 'no'}).status_code, 400)
+                                         json={'min_channel_count': 'no'}).status_code, 400)
 
     def test_settings_extra_keys(self):
         """扩展设置键：int 阈值 / 分组健康率 JSON 的读写与校验"""

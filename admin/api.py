@@ -530,8 +530,8 @@ def logs():
 # ---------------------------------------------------------------- 设置
 
 # 设置白名单：key -> (存储格式, 描述)；密钥类（API_TOKEN/email 等）不落库，保持 .env
+# 注：bilibili_only_mode 是「启动时布线程」的部署级开关，仅 .env 控制，不在此管理（避免半生效误导）
 _SETTING_KEYS = {
-    'bilibili_only_mode': 'bool',
     'min_channel_count': 'int',
     'stream_fail_limit': 'int',
     'monitor_history_keep': 'int',
@@ -565,7 +565,6 @@ def _settings_effective():
                         STREAM_CHECK_INTERVAL, STREAM_FAIL_LIMIT,
                         STREAM_HISTORY_KEEP, STREAM_PROBE_TIMEOUT)
     return {
-        'bilibili_only_mode': AggregatorUtils.is_bilibili_only_mode(),
         'min_channel_count': db.get_effective_int('min_channel_count', MIN_CHANNEL_COUNT),
         'stream_fail_limit': db.get_effective_int('stream_fail_limit', STREAM_FAIL_LIMIT),
         'monitor_history_keep': db.get_effective_int(
