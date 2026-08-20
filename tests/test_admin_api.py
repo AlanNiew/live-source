@@ -434,6 +434,28 @@ class AdminApiTest(unittest.TestCase):
         self.assertEqual(self.client.put('/api/admin/settings',
                                          json={'public_base_url': '   '}).status_code, 400)
 
+    def test_settings_alert_recipients(self):
+        """alert_recipients：逗号分隔多邮箱读写与校验"""
+        self._login()
+        resp = self.client.put('/api/admin/settings', json={
+            'alert_recipients': ' a@qq.com, b@163.com ',
+        })
+        self.assertEqual(resp.status_code, 200)
+        eff = resp.get_json()['effective']
+        self.assertEqual(eff['alert_recipients'], 'a@qq.com, b@163.com')
+        data = self.client.get('/api/admin/settings').get_json()
+        self.assertEqual(data['settings']['alert_recipients'], 'a@qq.com, b@163.com')
+        # 非法邮箱 / 空值
+        self.assertEqual(self.client.put('/api/admin/settings',
+                                         json={'alert_recipients': 'not-an-email'}).status_code, 400)
+        self.assertEqual(self.client.put('/api/admin/settings',
+                                         json={'alert_recipients': 'a@qq.com, broken'}).status_code, 400)
+        # 空串允许（回退发件人自身）
+        self.assertEqual(self.client.put('/api/admin/settings',
+                                         json={'alert_recipients': '  '}).status_code, 200)
+        self.assertEqual(self.client.get('/api/admin/settings').get_json()
+                         ['effective']['alert_recipients'], '')
+
 
 if __name__ == '__main__':
     unittest.main()

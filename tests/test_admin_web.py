@@ -60,7 +60,8 @@ class AdminWebTest(unittest.TestCase):
             '/channels': ['频道管理', '搜索频道名', '覆盖状态'],
             '/monitor': ['监控', '健康检测历史', '流探测明细', '仅看不可达'],
             '/logs': ['日志', '全部级别', '关键词'],
-            '/settings': ['设置', 'min_channel_count', 'public_base_url', 'alert_enabled'],
+            '/settings': ['设置', 'min_channel_count', 'public_base_url', 'alert_enabled',
+                           'alert_recipients'],
         }
         for page, expects in markers.items():
             resp = self.client.get(f'/admin{page}')

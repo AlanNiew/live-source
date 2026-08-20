@@ -1,5 +1,6 @@
 """管理数据层测试：建表/源配置/频道覆盖/监控历史/日志/清理"""
 import datetime
+import json
 import os
 import tempfile
 import unittest
@@ -296,6 +297,51 @@ class SettingsEffectiveTest(unittest.TestCase):
         with mock.patch('monitoring.alerts.importlib.util.spec_from_file_location') as m:
             AlertUtils.send_alert('测试', [{'name': 'x', 'status': True, 'detail': 'd'}])
         m.assert_not_called()
+
+    def _fake_notifier(self):
+        """写一个把收件人追加到文件的假发送模块（跨模块重载持久），返回 (path, 读取函数)"""
+        rec_path = os.path.join(tempfile.mkdtemp(), 'sends.txt')
+        mod_path = os.path.join(tempfile.mkdtemp(), 'fake_send.py')
+        with open(mod_path, 'w', encoding='utf-8') as f:
+            f.write(
+                "import json\n"
+                f"_REC = {rec_path!r}\n"
+                "class EmailNotifier:\n"
+                "    def __init__(self, **kw):\n"
+                "        pass\n"
+                "    def send(self, to_addrs=None, **kw):\n"
+                "        with open(_REC, 'a', encoding='utf-8') as fh:\n"
+                "            fh.write(json.dumps(list(to_addrs)) + '\\n')\n"
+                "        return True\n")
+
+        def read_sent():
+            with open(rec_path, encoding='utf-8') as fh:
+                return [json.loads(line) for line in fh if line.strip()]
+
+        return mod_path, read_sent
+
+    def _send_alert(self, mod_path):
+        """在假发送模块 + 临时邮箱环境下触发一次告警"""
+        from monitoring.alerts import AlertUtils
+        with mock.patch('monitoring.alerts.EMAIL_MODULE_PATH', mod_path), \
+             mock.patch.dict('monitoring.alerts.os.environ',
+                             {'email': 'sender@qq.com', 'password': 'pwd'}, clear=True), \
+             mock.patch.object(AlertUtils, 'build_html', return_value='<html>'):
+            AlertUtils.send_alert('测试', [{'name': 'x', 'status': True, 'detail': 'd'}],
+                                  level='error')
+
+    def test_alert_recipients_custom(self):
+        """alert_recipients 配置了多个邮箱：全部作为收件人"""
+        mod_path, read_sent = self._fake_notifier()
+        db.set_setting('alert_recipients', 'a@qq.com, b@163.com')
+        self._send_alert(mod_path)
+        self.assertEqual(read_sent(), [['a@qq.com', 'b@163.com']])
+
+    def test_alert_recipients_fallbacks_to_sender(self):
+        """alert_recipients 未配置：收件人回退为发送账号自身"""
+        mod_path, read_sent = self._fake_notifier()
+        self._send_alert(mod_path)
+        self.assertEqual(read_sent(), [['sender@qq.com']])
 
     def test_check_m3u_uses_db_threshold(self):
         """check_m3u 阈值动态读取：DB 设置优先"""

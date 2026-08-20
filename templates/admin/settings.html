@@ -99,6 +99,15 @@
           </label>
           <div class="form-text">关闭：监控/流探测不再发送任何告警邮件（只记日志）。</div>
         </div>
+        <div class="mt-3">
+          <label class="form-label small fw-semibold d-flex justify-content-between">
+            <span>告警收件人 <code>alert_recipients</code></span>
+            <span class="badge text-bg-light border setting-tag" data-key="alert_recipients">config 默认</span>
+          </label>
+          <input type="text" class="form-control" id="alert_recipients" placeholder="a@qq.com, b@163.com">
+          <div class="form-text">多个邮箱用英文逗号分隔，全部作为收件人（可含任意邮箱服务商）。
+            留空 = 收件人为发送账号自身（.env 的 email）。发送账号/授权码始终用 .env 配置。</div>
+        </div>
       </div>
     </div>
   </div>
@@ -136,6 +145,7 @@ async function loadSettings() {
       JSON.stringify(e.group_health_ratios, null, 2);
     document.getElementById('bilibili_only_mode').checked = !!e.bilibili_only_mode;
     document.getElementById('alert_enabled').checked = !!e.alert_enabled;
+    document.getElementById('alert_recipients').value = e.alert_recipients || '';
     markTags(data.settings || {});
   } catch (err) { toast(err.message, false); }
 }
@@ -151,6 +161,7 @@ document.getElementById('settingsForm').addEventListener('submit', async (e) => 
     public_base_url: document.getElementById('public_base_url').value.trim(),
     bilibili_only_mode: document.getElementById('bilibili_only_mode').checked,
     alert_enabled: document.getElementById('alert_enabled').checked,
+    alert_recipients: document.getElementById('alert_recipients').value.trim(),
   };
   try {
     body.group_health_ratios = JSON.parse(document.getElementById('group_health_ratios').value);

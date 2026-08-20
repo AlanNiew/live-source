@@ -540,6 +540,7 @@ _SETTING_KEYS = {
     'group_health_ratios': 'json',
     'public_base_url': 'str',
     'alert_enabled': 'bool',
+    'alert_recipients': 'str',
 }
 
 
@@ -562,6 +563,7 @@ def _settings_effective():
             'group_health_ratios', GROUP_HEALTH_RATIOS),
         'public_base_url': AggregatorUtils._public_base_url(),
         'alert_enabled': db.is_alert_enabled(default=True),
+        'alert_recipients': db.get_effective_str('alert_recipients', None) or '',
     }
 
 
@@ -589,11 +591,18 @@ def settings():
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 return jsonify({'error': f'{key} 必须为不小于 1 的整数'}), 400
         elif kind == 'str':
-            if not isinstance(value, str) or not value.strip():
-                return jsonify({'error': f'{key} 必须为非空字符串'}), 400
-            if key == 'public_base_url' and not value.strip().startswith(('http://', 'https://')):
-                return jsonify({'error': f'{key} 必须以 http:// 或 https:// 开头'}), 400
-            updates[key] = value.strip()
+            if not isinstance(value, str):
+                return jsonify({'error': f'{key} 必须为字符串'}), 400
+            if key == 'public_base_url':
+                if not value.strip().startswith(('http://', 'https://')):
+                    return jsonify({'error': f'{key} 必须以 http:// 或 https:// 开头'}), 400
+                updates[key] = value.strip()
+            elif key == 'alert_recipients':
+                # 逗号分隔的邮箱列表，可留空（留空 = 收件人默认发件人自身）
+                items = [v.strip() for v in value.split(',') if v.strip()]
+                if any('@' not in v for v in items):
+                    return jsonify({'error': f'{key} 必须是逗号分隔的有效邮箱'}), 400
+                updates[key] = ', '.join(items)
         elif kind == 'json':
             if not isinstance(value, dict) or not all(
                     isinstance(k, str) and isinstance(v, (int, float))

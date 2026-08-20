@@ -104,6 +104,19 @@ class AlertUtils:
                 _logger.warning("告警邮件未发送：未配置 email/password 环境变量")
                 return
 
+            # 收件人：settings 表 alert_recipients（逗号分隔邮箱，管理后台可配，
+            # 多收件人并存）；未配置时回退为发件人自身（向后兼容）。
+            # 注意：发送账号/授权码仍用 .env（不发邮箱类型仅影响 smtp 服务器选择，与收件人无关）
+            recipients = [email_addr]
+            try:
+                from admin import db
+                raw = db.get_effective_str('alert_recipients', '')
+                custom = [m.strip() for m in raw.split(',') if m.strip() and '@' in m]
+                if custom:
+                    recipients = custom
+            except Exception:
+                pass
+
             # 根据 .env 的邮箱地址推断类型（qq/163 等），默认 qq
             email_type = 'qq'
             if '@163.com' in email_addr:
@@ -122,9 +135,9 @@ class AlertUtils:
                 password=email_pwd,
                 from_addr=email_addr,
             )
-            # 用 HTML 格式发送（绕过纯文本的 send_notification）
+            # 用 HTML 格式发送（绕过纯文本的 send_notification）；多收件人并存
             sent = notifier.send(
-                to_addrs=[email_addr],
+                to_addrs=recipients,
                 subject=f"[{'故障告警' if level == 'error' else '服务恢复'}] {subject}",
                 content=html_content,
                 content_type='html',
