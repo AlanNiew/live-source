@@ -377,7 +377,8 @@ class SettingsEffectiveTest(unittest.TestCase):
                '#EXTINF:-1 tvg-id="3",C\nhttp://c\n')
         with mock.patch('monitoring.checks.requests.get') as m, \
              mock.patch('core.aggregator.AggregatorUtils.is_bilibili_only_mode',
-                        return_value=False):
+                        return_value=False), \
+             mock.patch('monitoring.checks.MIN_CHANNEL_COUNT', 30):
             resp = mock.Mock()
             resp.status_code = 200
             resp.text = m3u
