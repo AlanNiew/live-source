@@ -5,6 +5,18 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Optional, Union
 
+# 日志：优先走项目统一日志（core.logger）；本模块可能被 importlib 独立加载或脚本复用，
+# 项目日志不可用时回退标准 logging（保留原 print 信息不丢失）
+try:
+    from core.logger import get_logger
+    _log = get_logger('email')
+except Exception:
+    import logging
+    _log = logging.getLogger('email')
+    if not _log.handlers:
+        _log.addHandler(logging.StreamHandler())
+        _log.setLevel(logging.INFO)
+
 
 class EmailNotifier:
     """邮件通知器"""
@@ -121,19 +133,23 @@ class EmailNotifier:
                 server.sendmail(self.from_addr, to_addrs, msg.as_string())
 
                 print(f"邮件发送成功！收件人：{to_addrs}")
+                _log.info(f"邮件发送成功！收件人：{to_addrs}")
                 return True
 
             except smtplib.SMTPAuthenticationError:
                 print("认证失败，请检查用户名和密码/授权码")
+                _log.error("认证失败，请检查用户名和密码/授权码")
                 return False
             except smtplib.SMTPException as e:
                 print(f"SMTP错误：{e}")
+                _log.warning(f"SMTP错误：{e}")
                 if attempt == 0:
                     time.sleep(2)  # 短暂等待后重试
                     continue
                 return False
             except Exception as e:
                 print(f"邮件发送失败：{e}")
+                _log.warning(f"邮件发送失败：{e}")
                 if attempt == 0:
                     time.sleep(2)
                     continue

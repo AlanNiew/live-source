@@ -50,8 +50,8 @@ PUBLIC_M3U_SOURCES = [
 
 # 聚合刷新间隔（秒）——公开源部分每 6 小时刷新一次（含探测过滤）
 AGGREGATE_REFRESH_INTERVAL = 6 * 60 * 60
-# HNTV 官方源刷新间隔（秒）——官方接口签名有效期约 4h，3h 刷新留 1h 余量，保持签名新鲜
-OFFICIAL_REFRESH_INTERVAL = 3 * 60 * 60
+# HNTV 官方源刷新间隔（秒）——官方接口签名有效期约 4h，2h 刷新留 2h 余量，保持签名新鲜
+OFFICIAL_REFRESH_INTERVAL = 2 * 60 * 60
 
 # 聚合时探测过滤不可达源（连续两轮失败才丢弃，避免源瞬时抖动被误杀）
 FILTER_UNREACHABLE = True
@@ -61,9 +61,6 @@ STREAM_FAIL_LIMIT = 2                # 连续失败 N 轮才丢弃
 HNTV_GROUP_NAME = "河南卫视"
 # 未识别分组时的默认组名
 DEFAULT_GROUP_NAME = "其他"
-
-# 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后），其余兜底
-GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2}
 
 # CCTV 开路频道中文标准名映射（编号 -> 中文副名）
 # 依据央视官方频道名；付费/专业频道（台球/高尔夫/风暴等）不在此表，会被过滤掉
@@ -103,6 +100,81 @@ SIGN_PARAM_PAT = re.compile(
     r'[?&](auth_key|authKey|sign|token|wsSecret|wsTime|expire|expires|txSecret|GuardEncType|accountinfo)=',
     re.I)
 
+# ---------------------------------------------------------------- B站直播
+# B 站直播间列表（默认频道：央视新闻 / 河南卫视 / 中国应急管理）。
+# 新增频道格式（两种写法二选一）：
+#   {"name": "频道名", "room_id": 房间号}   # 推荐：房间号即直播间网址 live.bilibili.com/<房间号> 的数字
+#   {"name": "频道名", "uid": UP主UID}       # 兼容：通过 uid 解析房间号（需查 uid）
+# 聚合时判断开播，开播的频道才加入 m3u 列表（地址为本服务的代理 URL，播放器只认本服务）。
+# 更推荐用运行时 API 动态添加（POST /api/bilibili/rooms），无需改配置重启。
+BILIBILI_ROOMS = [
+    {"name": "央视新闻", "uid": 222103174},
+]
+
+# B 站直播防盗链：CDN 校验 Referer 与 UA，代理转拉时必须注入
+BILIBILI_REFERER = "https://live.bilibili.com/"
+BILIBILI_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+
+# B 站登录 Cookie（解锁蓝光/原画；留空 = 游客仅 720P）。
+# 只需 SESSDATA（实测仅 SESSDATA 即可解锁原画，HttpOnly 需从 DevTools/Network 抓取）。
+# 配置在 .env：BILIBILI_COOKIE=SESSDATA=xxx; buvid3=yyy
+# 安全：与 API_TOKEN 同等敏感（账号凭据），勿提交、勿打印；cookie 失效自动降级游客画质
+BILIBILI_COOKIE = os.environ.get('BILIBILI_COOKIE', '').strip()
+
+# 房间信息/流地址解析的磁盘缓存路径（流地址签名约 4h 过期，缓存设短 TTL 兜底）
+BILIBILI_CACHE_PATH = os.path.join(XML_DATA_DIR, 'bilibili_rooms.json')
+# 运行时动态添加的频道列表（POST /api/bilibili/rooms 写入，重启不丢）。
+# 注意：与 BILIBILI_CACHE_PATH 语义不同——那是 uid→room_id 的解析缓存，不要混用
+BILIBILI_CUSTOM_ROOMS_PATH = os.path.join(XML_DATA_DIR, 'bilibili_custom_rooms.json')
+# 流地址解析结果的内存缓存 TTL（秒）：地址带时效签名，过期必须重新解析
+BILIBILI_PLAY_CACHE_TTL = 1800
+
+# B 站直播频道所在分组（输出顺序放最后，见 GROUP_ORDER）
+BILIBILI_GROUP_NAME = "B站直播"
+
+# 本服务对外基础地址（聚合生成 B 站代理频道 URL 时用）：
+# 播放器/盒子必须能访问该地址。容器内默认 localhost 仅开发用，
+# 生产部署需通过环境变量覆盖为宿主机映射地址（如 http://服务器IP:15002）
+PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'http://localhost:5002')
+
+# B 站分片直连模式：True 时主清单由本服务代理重写、分片指向 B 站 CDN 直连
+# （省服务器带宽，实测分片无 Referer 也可访问，防盗链只卡主清单）；
+# False 时回退全代理（分片也经本服务转发，兼容性兜底，B 站收紧分片防盗链时用）
+BILIBILI_DIRECT_SEGMENTS = os.environ.get('BILIBILI_DIRECT_SEGMENTS', 'true').lower() == 'true'
+
+# 分组顺序：河南卫视（hntv官方）-> 央视 -> 卫视（健康率低放最后）-> B站直播，其余兜底
+GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2, BILIBILI_GROUP_NAME: 3}
+
+# B 站直播测试模式：开启时聚合跳过 hntv 官方源与公开源拉取，只收集 B 站直播频道
+# （测试 B 站接入期间启用，避免每次启动拉公开源+探测 70 频道拖慢重启；
+# 正式使用设 BILIBILI_ONLY_MODE=false 恢复完整聚合）
+BILIBILI_ONLY_MODE = os.environ.get('BILIBILI_ONLY_MODE', 'true').lower() == 'true'
+
+# ---------------------------------------------------------------- 管理后台
+# 管理界面/管理 API 的登录密码（session 鉴权；留空 = 禁用管理功能，安全默认）
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '').strip()
+# 管理会话安全（上线加固）：
+# - SESSION_COOKIE_SECURE：nginx 反代 + HTTPS 后设为 true，会话 Cookie 仅经 TLS 传输
+# - ADMIN_SESSION_HOURS：登录会话有效期（小时，登录时 session.permanent=True 生效）
+# - 登录防爆破：连续失败 ADMIN_LOGIN_MAX_FAILURES 次锁定 ADMIN_LOGIN_LOCKOUT_SECONDS 秒
+SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true'
+ADMIN_SESSION_HOURS = int(os.environ.get('ADMIN_SESSION_HOURS', '12'))
+ADMIN_LOGIN_MAX_FAILURES = int(os.environ.get('ADMIN_LOGIN_MAX_FAILURES', '5'))
+ADMIN_LOGIN_LOCKOUT_SECONDS = int(os.environ.get('ADMIN_LOGIN_LOCKOUT_SECONDS', '300'))
+# 管理数据 SQLite 单文件（源配置/频道覆盖/监控历史/日志）
+ADMIN_DB_PATH = os.environ.get('ADMIN_DB_PATH', os.path.join(XML_DATA_DIR, 'admin.db'))
+# 滚动日志文件路径（logging 双 handler：文件 + SQLite logs 表）
+LOG_FILE_PATH = os.environ.get('LOG_FILE_PATH', os.path.join(XML_DATA_DIR, 'app.log'))
+# 历史数据保留上限（清理策略，防 DB 无限膨胀）
+MONITOR_HISTORY_KEEP = int(os.environ.get('MONITOR_HISTORY_KEEP', '500'))     # 常规检测轮数
+# 流探测条数：30 分钟一轮 × 约 70 频道 ≈ 3400 条/天，20000 约保留 6 天
+STREAM_HISTORY_KEEP = int(os.environ.get('STREAM_HISTORY_KEEP', '20000'))
+LOG_KEEP_DAYS = int(os.environ.get('LOG_KEEP_DAYS', '7'))                     # 日志保留天数
+# 管理 API 列表分页：每页条数上限（超出截断）
+MAX_PAGE_SIZE = 200
+# 频道覆盖层内存缓存 TTL（秒）：聚合/频道列表查询覆盖配置的缓存时长
+CHANNEL_OVERRIDE_CACHE_TTL = 60
+
 # ---------------------------------------------------------------- 监控
 # 检测目标（monitor 跑在 api 容器内部，自检用容器内端口 5002；
 # 宿主机映射端口 15002 在容器内连不上。若未来加 nginx 反代，用环境变量覆盖）
@@ -111,7 +183,10 @@ M3U_URL = os.environ.get('MONITOR_M3U_URL', 'http://localhost:5002/api/live.m3u8
 EPG_URL = os.environ.get('MONITOR_EPG_URL', 'http://localhost:5002/api/live.xml.gz')
 
 # 频道数低于此值视为异常（正常约 70；公开源全挂只剩 hntv 时约 15，30 居中可捕获此隐蔽故障）
-MIN_CHANNEL_COUNT = 30
+# B 站测试模式（BILIBILI_ONLY_MODE=true）下列表只有 1-2 个频道，自动用低阈值 1 避免误报；
+# 仍可用环境变量 MIN_CHANNEL_COUNT 显式覆盖
+MIN_CHANNEL_COUNT = int(os.environ.get(
+    'MIN_CHANNEL_COUNT', '1' if BILIBILI_ONLY_MODE else '30'))
 
 # 检测时段（GMT+8）：仅 8:00 - 24:00 检测，0:00-7:59 不检测（不消耗流量/不打扰）
 CHECK_WINDOW_START_HOUR = 8     # 开始（含）

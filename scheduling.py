@@ -8,10 +8,14 @@ import datetime
 import threading
 import time
 
-from config import AGGREGATE_REFRESH_INTERVAL, GMT8, OFFICIAL_REFRESH_INTERVAL
+from config import (AGGREGATE_REFRESH_INTERVAL, BILIBILI_ONLY_MODE, GMT8,
+                    OFFICIAL_REFRESH_INTERVAL)
 from core.aggregator import AggregatorUtils
 from core.epg import XmlUtils
 from monitoring.scheduler import MonitorScheduler
+
+from core.logger import get_logger
+_logger = get_logger('scheduling')
 
 
 def schedule_daily_xml_update():
@@ -24,15 +28,21 @@ def schedule_daily_xml_update():
                 now = datetime.datetime.now(tz=GMT8)
                 tomorrow = now + datetime.timedelta(days=1)
                 next_update = tomorrow.replace(hour=2, minute=30, second=0, microsecond=0)
-                time_to_wait = (next_update - now).total_seconds()
+                time_to_wait = int((next_update - now).total_seconds())
 
-                print(f"等待 {time_to_wait} 秒后更新XML数据...")
+                _logger.info(f"等待 {time_to_wait} 秒后更新XML数据...")
                 time.sleep(time_to_wait)
 
                 XmlUtils.get_and_save_xml_data()
-                print("XML数据已更新")
-            except Exception as e:
-                print(f"定时更新XML数据时出错: {str(e)}")
+                _logger.info("XML数据已更新")
+                # 关键事件入库（管理页日志可查）
+                try:
+                    from admin import db
+                    db.record_event('INFO', 'scheduling', "EPG XML 每日更新完成")
+                except Exception:
+                    pass
+            except Exception:
+                _logger.exception("定时更新XML数据时出错")
 
     scheduler_thread = threading.Thread(target=update_xml_daily, daemon=True)
     scheduler_thread.start()
@@ -42,45 +52,71 @@ def schedule_aggregate_refresh():
     """
     聚合刷新（双频率）：
     - 公开源线程：启动立即 + 每 6h 拉公开源/探测过滤/合并（get_aggregated_m3u）
-    - 官方源线程：启动立即 + 每 1h 只拉 hntv 官方源刷新签名地址（refresh_official_only）
+    - 官方源线程：启动立即 + 每 3h 只拉 hntv 官方源刷新签名地址（refresh_official_only）
+    - B 站测试模式（BILIBILI_ONLY_MODE=true）：聚合里只有 B 站频道、没有 hntv 签名要刷新，
+      官方源线程与公开源线程做的是同一件事，跳过官方源线程避免重复采集
     """
     def public_loop():
         while True:
             try:
-                # 首次启动立即刷新一次，之后按间隔刷新
-                AggregatorUtils.get_aggregated_m3u()
-                print("聚合 m3u 已刷新（公开源）")
-                time.sleep(AGGREGATE_REFRESH_INTERVAL)
-            except Exception as e:
-                print(f"定时刷新聚合 m3u 出错: {str(e)}")
+                # 首次启动立即刷新一次，之后按间隔刷新；锁被占/失败返回 None，区分日志
+                if AggregatorUtils.get_aggregated_m3u():
+                    _logger.info("聚合 m3u 已刷新（公开源）")
+                else:
+                    _logger.info("公开源聚合跳过或失败（详见上方聚合日志）")
+                # 周期动态化：每轮睡前重读 settings（下一轮生效，无需重启）
+                from admin import db
+                interval = db.get_effective_int(
+                    'aggregate_refresh_interval', AGGREGATE_REFRESH_INTERVAL)
+                time.sleep(interval)
+            except Exception:
+                _logger.exception("定时刷新聚合 m3u 出错")
                 time.sleep(60)  # 出错后等 1 分钟再试，避免狂跑
 
-    public_thread = threading.Thread(target=public_loop, daemon=True)
+    public_thread = threading.Thread(target=public_loop, daemon=True, name='聚合-公开源')
     public_thread.start()
+
+    if BILIBILI_ONLY_MODE:
+        _logger.info("测试模式（BILIBILI_ONLY_MODE）：跳过官方源刷新线程（无 hntv 签名需刷新）")
+        return
 
     def official_loop():
         # 稍等公开源线程完成首次聚合（公开缓存未就绪时 refresh_official_only 会自动回退全量）
         time.sleep(10)
         while True:
             try:
-                AggregatorUtils.refresh_official_only()
-                print("官方源已刷新")
-                time.sleep(OFFICIAL_REFRESH_INTERVAL)
-            except Exception as e:
-                print(f"官方源刷新出错: {str(e)}")
+                # 锁被占/失败返回 None，区分日志避免误导
+                if AggregatorUtils.refresh_official_only():
+                    _logger.info("官方源已刷新")
+                else:
+                    _logger.info("官方源刷新跳过或失败（详见上方聚合日志）")
+                # 周期动态化：每轮睡前重读 settings（下一轮生效）
+                from admin import db
+                interval = db.get_effective_int(
+                    'official_refresh_interval', OFFICIAL_REFRESH_INTERVAL)
+                time.sleep(interval)
+            except Exception:
+                _logger.exception("官方源刷新出错")
                 time.sleep(60)
 
-    official_thread = threading.Thread(target=official_loop, daemon=True)
+    official_thread = threading.Thread(target=official_loop, daemon=True, name='聚合-官方源')
     official_thread.start()
 
 
 def start_all():
     """统一启动全部后台调度（main.py 导入时调用一次）"""
+    # 初始化管理数据库（建表；失败不阻断服务，落库静默降级）
+    try:
+        from admin import db
+        db.init_db()
+    except Exception:
+        pass
+
     schedule_daily_xml_update()
-    print("定时XML更新任务已启动")
+    _logger.info("定时XML更新任务已启动")
 
     schedule_aggregate_refresh()
-    print("定时聚合刷新任务已启动")
+    _logger.info("定时聚合刷新任务已启动")
 
     MonitorScheduler.schedule_monitor()
-    print("健康监控任务已启动")
+    _logger.info("健康监控任务已启动")

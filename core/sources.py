@@ -5,6 +5,9 @@ import requests
 
 from config import (CARRIER_IP_PREFIXES, CCTV_NAME_MAP, DEFAULT_GROUP_NAME,
                     PUBLIC_M3U_SOURCES, SIGN_PARAM_PAT)
+from core.logger import get_logger
+
+_logger = get_logger('sources')
 
 
 class SourceUtils:
@@ -20,19 +23,37 @@ class SourceUtils:
         try:
             response = requests.get(url, timeout=20)
             if response.status_code != 200:
-                print(f"拉取公开源失败({response.status_code}): {url}")
+                _logger.warning(f"拉取公开源失败({response.status_code}): {url}")
                 return ""
-            print(f"拉取公开源成功: {url}")
+            _logger.info(f"拉取公开源成功: {url}")
             return response.text
         except Exception as e:
-            print(f"拉取公开源出错: {url} -> {str(e)}")
+            _logger.warning(f"拉取公开源出错: {url} -> {str(e)}")
             return ""
+
+    @staticmethod
+    def get_public_source_urls():
+        """
+        聚合用公开源 url 列表：管理 DB（admin/sources 表 type=public）优先，
+        空表/未初始化/异常一律回退 config.PUBLIC_M3U_SOURCES 种子值
+        （向后兼容：不配管理库时行为与旧版完全一致）
+        :return: url 列表
+        """
+        try:
+            from admin import db
+            if db.db_ready():
+                urls = db.get_enabled_public_urls()
+                if urls:
+                    return urls
+        except Exception:
+            pass
+        return list(PUBLIC_M3U_SOURCES)
 
     @staticmethod
     def fetch_all_public_channels():
         """拉取全部公开源并解析为频道列表"""
         channels = []
-        for url in PUBLIC_M3U_SOURCES:
+        for url in SourceUtils.get_public_source_urls():
             m3u_text = SourceUtils.fetch_public_m3u(url)
             channels.extend(SourceUtils.parse_m3u_channels(m3u_text))
         return channels
@@ -177,7 +198,7 @@ class SourceUtils:
 
             # 3. 其余全部过滤（地方台/英文台/付费频道/国际版等）
 
-        print(f"过滤+中文化：{len(channels)} 个 -> 保留 {len(result)} 个（央视+卫视）")
+        _logger.info(f"过滤+中文化：{len(channels)} 个 -> 保留 {len(result)} 个（央视+卫视）")
         return result
 
     @staticmethod

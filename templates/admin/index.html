@@ -1,0 +1,190 @@
+{% extends "admin/base.html" %}
+{% block title %}仪表盘{% endblock %}
+{% block content %}
+<div class="row g-3 mb-4" id="cardsRow">
+  <div class="col-6 col-lg-3">
+    <div class="card h-100">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon" id="healthIcon"><i class="bi bi-heart-pulse"></i></div>
+        <div class="overflow-hidden">
+          <div class="text-secondary small text-nowrap">常规健康</div>
+          <div class="fs-5 fw-bold" id="cardHealth">…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card h-100">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon" id="streamIcon"><i class="bi bi-water"></i></div>
+        <div class="overflow-hidden">
+          <div class="text-secondary small text-nowrap">流探测</div>
+          <div class="fs-5 fw-bold" id="cardStream">…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card h-100">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon bg-primary-subtle text-primary"><i class="bi bi-hdd-network"></i></div>
+        <div class="overflow-hidden">
+          <div class="text-secondary small text-nowrap">最近检测频道数</div>
+          <div class="fs-5 fw-bold" id="cardChannels">…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-lg-3">
+    <div class="card h-100">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon bg-info-subtle text-info"><i class="bi bi-collection-play"></i></div>
+        <div class="overflow-hidden">
+          <div class="text-secondary small text-nowrap">当前频道总数</div>
+          <div class="fs-5 fw-bold" id="cardTotal">…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span><i class="bi bi-graph-up me-1"></i>频道数趋势（最近 24 轮常规检测）</span>
+    <span class="text-secondary small" id="refreshHint"><i class="bi bi-arrow-clockwise"></i> 30 秒自动刷新</span>
+  </div>
+  <div class="card-body">
+    <canvas id="trendChart" height="80"></canvas>
+    <div class="empty-state small" id="trendEmpty" hidden><i class="bi bi-graph-up"></i>暂无检测数据</div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-clock-history me-1"></i>最近健康时间线（24 轮）</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead><tr><th>时间</th><th>状态</th><th>频道数</th><th class="d-none d-sm-table-cell">EPG(KB)</th></tr></thead>
+            <tbody id="historyBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-journal-text me-1"></i>最近日志</span>
+        <a class="small text-decoration-none" href="/admin/logs">查看全部 <i class="bi bi-arrow-right"></i></a>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead><tr><th>时间</th><th>级别</th><th class="d-none d-md-table-cell">模块</th><th>内容</th></tr></thead>
+            <tbody id="logsBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+const levelBadge = l => ({
+  'ERROR': '<span class="badge text-bg-danger">ERROR</span>',
+  'WARNING': '<span class="badge text-bg-warning">WARNING</span>',
+  'INFO': '<span class="badge text-bg-info">INFO</span>',
+}[l] || `<span class="badge text-bg-secondary">${esc(l)}</span>`);
+
+/* 趋势图：最近 24 轮检测的频道数（CDN 不可用时静默降级为无图） */
+let trendChart = null;
+function renderTrend(recent) {
+  const canvas = document.getElementById('trendChart');
+  const empty = document.getElementById('trendEmpty');
+  if (!recent.length || typeof Chart === 'undefined') {
+    canvas.hidden = true;
+    empty.hidden = false;
+    return;
+  }
+  canvas.hidden = false;
+  empty.hidden = true;
+  const labels = recent.map(r => String(r.ts).slice(11, 16));
+  const values = recent.map(r => r.channel_count);
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '频道数',
+        data: values,
+        borderColor: '#4f6ef7',
+        backgroundColor: 'rgba(79,110,247,0.08)',
+        fill: true,
+        tension: 0.35,
+        pointRadius: 3,
+        pointBackgroundColor: '#4f6ef7',
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {legend: {display: false}},
+      scales: {y: {beginAtZero: true, ticks: {precision: 0}}},
+    },
+  });
+}
+
+function setStat(iconId, valueId, ok, label) {
+  const icon = document.getElementById(iconId);
+  icon.className = `stat-icon ${ok ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'}`;
+  document.getElementById(valueId).innerHTML =
+    `<span class="badge text-bg-${ok ? 'success' : 'danger'}">${esc(label)}</span>`;
+}
+
+async function load() {
+  try {
+    const [summary, channels, logs] = await Promise.all([
+      api('/api/admin/monitor/summary'),
+      api('/api/admin/channels?page_size=1'),
+      api('/api/admin/logs?page_size=8'),
+    ]);
+    const ok = s => s === 'OK';
+    setStat('healthIcon', 'cardHealth', ok(summary.health.status), summary.health.status);
+    setStat('streamIcon', 'cardStream', ok(summary.stream.status), summary.stream.status);
+    document.getElementById('cardChannels').textContent =
+      summary.last_check ? summary.last_check.channel_count : '—';
+    document.getElementById('cardTotal').textContent = channels.total;
+    renderTrend(summary.recent);
+
+    const badge = (b, label) => `<span class="badge text-bg-${b ? 'success' : 'danger'}">${label}</span>`;
+    const hb = document.getElementById('historyBody');
+    hb.innerHTML = summary.recent.length ? summary.recent.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td>${badge(r.overall === 1, r.overall === 1 ? 'OK' : 'FAIL')}</td>
+        <td>${esc(r.channel_count)}</td>
+        <td class="d-none d-sm-table-cell">${esc(r.epg_size)}</td>
+      </tr>`).join('') : emptyRow(4, '暂无检测记录', 'bi-clock-history');
+
+    const lb = document.getElementById('logsBody');
+    lb.innerHTML = logs.items.length ? logs.items.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td>${levelBadge(r.level)}</td>
+        <td class="d-none d-md-table-cell"><span class="badge text-bg-light border">${esc(r.module)}</span></td>
+        <td class="text-ellipsis" style="max-width: 240px" title="${esc(r.message)}">${esc(r.message)}</td>
+      </tr>`).join('') : emptyRow(4, '暂无日志', 'bi-journal-text');
+  } catch (err) {
+    toast(err.message, false);
+  }
+}
+load();
+/* 30 秒自动刷新；页面隐藏时暂停，回来立即刷一次 */
+setInterval(() => { if (!document.hidden) load(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+</script>
+{% endblock %}

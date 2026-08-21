@@ -4,7 +4,16 @@ import requests
 from config import STREAM_PROBE_TIMEOUT, STREAM_USER_AGENT
 
 
-def probe_stream(url, accept_403=False, user_agent=None):
+def _probe_timeout():
+    """单流探测超时（秒）：settings 优先，config 兜底"""
+    try:
+        from admin import db
+        return db.get_effective_int('stream_probe_timeout', STREAM_PROBE_TIMEOUT)
+    except Exception:
+        return STREAM_PROBE_TIMEOUT
+
+
+def probe_stream(url, accept_403=False, user_agent=None, timeout=None):
     """
     探测单个流地址可达性：GET + Range 请求读少量字节即断开
     （HEAD 对直播源不可靠，很多返回 404；Range 206 也算成功）
@@ -14,12 +23,14 @@ def probe_stream(url, accept_403=False, user_agent=None):
                       False 时仅 200/206 算可达（监控告警口径）
     :param user_agent: 探测 UA，默认监控 UA；聚合过滤传聚合 UA（保持历史行为，
                       不同 UA 可能影响源端 403/拒答判定）
+    :param timeout: 覆盖超时（默认动态读 settings）
     :return: True 可达 / False 不可达
     """
+    timeout = timeout if timeout is not None else _probe_timeout()
     r = None
     try:
         r = requests.get(
-            url, timeout=STREAM_PROBE_TIMEOUT, stream=True,
+            url, timeout=timeout, stream=True,
             headers={'Range': 'bytes=0-1024',
                      'User-Agent': user_agent or STREAM_USER_AGENT},
         )

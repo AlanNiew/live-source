@@ -1,14 +1,19 @@
 """健康检测项：服务存活/直播列表/EPG/流探测，含常规与流探测两套状态机"""
+import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from config import (ALERT_GROUPS, DEFAULT_GROUP_NAME, DEFAULT_GROUP_RATIO,
-                    EPG_URL, GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
+                    EPG_URL, GMT8, GROUP_HEALTH_RATIOS, HEALTH_URL, M3U_URL,
                     MIN_CHANNEL_COUNT, STREAM_CHECK_CONCURRENCY)
+from core.logger import get_logger
 from core.probing import probe_stream
 from core.sources import SourceUtils
 from monitoring.alerts import AlertUtils
+
+
+_logger = get_logger('checks')
 
 
 class CheckUtils:
@@ -26,6 +31,33 @@ class CheckUtils:
     # ------------------------------------------------------------ 检测项
 
     @staticmethod
+    def _min_channel_count():
+        """监控频道数阈值：DB 设置优先；未设置时沿用 config 自动联动（测试模式低阈值 1）"""
+        from admin import db
+        value = db.get_effective_int('min_channel_count', None)
+        if value is not None:
+            return value
+        from core.aggregator import AggregatorUtils
+        if AggregatorUtils.is_bilibili_only_mode():
+            return 1
+        return MIN_CHANNEL_COUNT
+
+    @staticmethod
+    def _group_health_ratios():
+        """分组健康率阈值：DB 设置（JSON）优先，config 兜底"""
+        from admin import db
+        ratios = db.get_effective_json('group_health_ratios', None)
+        if ratios:
+            return ratios
+        return GROUP_HEALTH_RATIOS
+
+    @staticmethod
+    def _stream_concurrency():
+        """流探测并发数：settings 优先，config 兜底"""
+        from admin import db
+        return db.get_effective_int('stream_check_concurrency', STREAM_CHECK_CONCURRENCY)
+
+    @staticmethod
     def check_health():
         """
         检测服务存活：/health 返回 200 且 status=healthy
@@ -38,13 +70,13 @@ class CheckUtils:
             data = r.json()
             return data.get('status') == 'healthy'
         except Exception as e:
-            print(f"健康检测请求失败: {str(e)}")
+            _logger.warning(f"健康检测请求失败: {str(e)}")
             return False
 
     @staticmethod
     def check_m3u():
         """
-        检测核心功能：/api/live.m3u8 返回 200 且频道数 ≥ MIN_CHANNEL_COUNT
+        检测核心功能：/api/live.m3u8 返回 200 且频道数 ≥ 阈值（DB 设置优先，config 兜底）
         :return: (正常bool, 频道数int)
         """
         try:
@@ -52,9 +84,9 @@ class CheckUtils:
             if r.status_code != 200:
                 return False, 0
             count = r.text.count('#EXTINF')
-            return count >= MIN_CHANNEL_COUNT, count
+            return count >= CheckUtils._min_channel_count(), count
         except Exception as e:
-            print(f"m3u 检测请求失败: {str(e)}")
+            _logger.warning(f"m3u 检测请求失败: {str(e)}")
             return False, 0
 
     @staticmethod
@@ -71,7 +103,7 @@ class CheckUtils:
             size_kb = len(r.content) // 1024
             return size_kb > 0, size_kb
         except Exception as e:
-            print(f"epg 检测请求失败: {str(e)}")
+            _logger.warning(f"epg 检测请求失败: {str(e)}")
             return False, 0
 
     @staticmethod
@@ -102,7 +134,7 @@ class CheckUtils:
                     items.append((line, cur_group, cur_name))
             return items
         except Exception as e:
-            print(f"流地址解析请求失败: {str(e)}")
+            _logger.warning(f"流地址解析请求失败: {str(e)}")
             return []
 
     # ------------------------------------------------------------ 常规状态机
@@ -118,21 +150,22 @@ class CheckUtils:
         health_ok = CheckUtils.check_health()
         m3u_ok, channel_count = CheckUtils.check_m3u()
         epg_ok, epg_size = CheckUtils.check_epg()
+        min_count = CheckUtils._min_channel_count()
         current = "OK" if (health_ok and m3u_ok and epg_ok) else "FAIL"
 
         if current == "OK":
             CheckUtils._fail_count = 0
-            print(f"健康检测正常（频道数 {channel_count}，节目单 {epg_size}KB）")
+            _logger.info(f"健康检测正常（频道数 {channel_count}，节目单 {epg_size}KB）")
         else:
             CheckUtils._fail_count += 1
             reason = []
             if not health_ok:
                 reason.append("/health 不可达")
             if not m3u_ok:
-                reason.append(f"频道数 {channel_count} < {MIN_CHANNEL_COUNT}")
+                reason.append(f"频道数 {channel_count} < {min_count}")
             if not epg_ok:
                 reason.append("节目单不可用")
-            print(f"健康检测异常（连续第 {CheckUtils._fail_count} 次）：{', '.join(reason)}")
+            _logger.info(f"健康检测异常（连续第 {CheckUtils._fail_count} 次）：{', '.join(reason)}")
 
         # 状态翻转时才发邮件
         if current == "FAIL" and CheckUtils._last_status == "OK":
@@ -146,7 +179,7 @@ class CheckUtils:
                     "name": "直播源 (频道数)",
                     "status": m3u_ok,
                     "detail": f"{channel_count} 个频道" if m3u_ok
-                              else f"{channel_count} 个，低于阈值 {MIN_CHANNEL_COUNT}",
+                              else f"{channel_count} 个，低于阈值 {min_count}",
                 },
                 {
                     "name": "节目单 (EPG)",
@@ -174,6 +207,15 @@ class CheckUtils:
 
         CheckUtils._last_status = current
 
+        # 落库：常规健康检测历史（失败不影响检测）
+        try:
+            from admin import db
+            db.save_monitor_history(
+                health_ok, m3u_ok, epg_ok, channel_count, epg_size,
+                current == "OK")
+        except Exception:
+            pass
+
     # ------------------------------------------------------------ 流探测状态机
 
     @staticmethod
@@ -188,9 +230,11 @@ class CheckUtils:
         """
         items = CheckUtils.fetch_m3u_groups()
         bad_names = defaultdict(list)  # group -> 不可达频道名列表（供日志与邮件明细）
+        # 并发数动态化：settings 优先，config 兜底（下一轮生效）
+        concurrency = CheckUtils._stream_concurrency()
         if not items:
             current = "FAIL"
-            print("流探测异常：聚合列表拉取失败或无流地址")
+            _logger.info("流探测异常：聚合列表拉取失败或无流地址")
             checks = [{
                 "name": "流地址可达性",
                 "status": False,
@@ -198,8 +242,20 @@ class CheckUtils:
             }]
         else:
             # 并发探测所有流（严格判定：仅 200/206 可达，与聚合过滤的宽松口径区分）
-            with ThreadPoolExecutor(max_workers=STREAM_CHECK_CONCURRENCY) as executor:
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
                 results = list(executor.map(probe_stream, [u for u, _, _ in items]))
+            # 落库：本轮流探测明细（每频道一条，整轮批量写入，失败静默不影响检测）
+            try:
+                from admin import db
+                now = datetime.datetime.now(tz=GMT8)
+                round_id = now.strftime('%Y%m%d%H%M')
+                rows = [
+                    (now.strftime('%Y-%m-%d %H:%M:%S'), group, name, url, ok, round_id)
+                    for (url, group, name), ok in zip(items, results)
+                ]
+                db.save_stream_history_batch(rows)
+            except Exception:
+                pass
             # 按分组统计
             groups = defaultdict(lambda: [0, 0])  # group -> [可达数, 总数]
             for (url, group, name), ok in zip(items, results):
@@ -213,7 +269,7 @@ class CheckUtils:
             all_ok = True
             for group, (ok_count, total) in groups.items():
                 ratio = ok_count / total
-                threshold = GROUP_HEALTH_RATIOS.get(group, DEFAULT_GROUP_RATIO)
+                threshold = CheckUtils._group_health_ratios().get(group, DEFAULT_GROUP_RATIO)
                 group_ok = ratio >= threshold
                 if group in ALERT_GROUPS and not group_ok:
                     all_ok = False
@@ -224,15 +280,15 @@ class CheckUtils:
                 })
             current = "OK" if all_ok else "FAIL"
             for c in checks:
-                print(f"流探测 [{c['name']}]: {'达标' if c['status'] else '不达标'} - {c['detail']}")
+                _logger.info(f"流探测 [{c['name']}]: {'达标' if c['status'] else '不达标'} - {c['detail']}")
             # 日志明细：各组不可达频道列表，便于排查
             for group, names in bad_names.items():
                 if names:
-                    print(f"  不可达频道 [{group}]: {'、'.join(names)}")
+                    _logger.info(f"  不可达频道 [{group}]: {'、'.join(names)}")
 
         if current == "FAIL":
             CheckUtils._stream_fail_count += 1
-            print(f"流探测异常（连续第 {CheckUtils._stream_fail_count} 次）")
+            _logger.info(f"流探测异常（连续第 {CheckUtils._stream_fail_count} 次）")
         else:
             CheckUtils._stream_fail_count = 0
 

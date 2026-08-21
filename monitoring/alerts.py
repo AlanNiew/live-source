@@ -5,6 +5,9 @@ import time
 
 from config import EMAIL_MODULE_PATH, EMAIL_TEMPLATE_PATH
 
+from core.logger import get_logger
+_logger = get_logger('alerts')
+
 
 class AlertUtils:
     """告警邮件工具类（构建 HTML + 发送）"""
@@ -57,7 +60,7 @@ class AlertUtils:
             with open(EMAIL_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
                 template = f.read()
         except Exception as e:
-            print(f"读取邮件模板失败，使用空模板: {str(e)}")
+            _logger.warning(f"读取邮件模板失败，使用空模板: {str(e)}")
             template = '{rows}'
 
         return template.format(
@@ -81,6 +84,13 @@ class AlertUtils:
         发送失败只记日志，不影响检测循环
         """
         try:
+            # 告警开关：管理后台/DB 设置 alert_enabled=false 时整体静默（不构建、不发送）。
+            # 测试模式、本机调试时一键关告警，避免误报骚扰
+            from admin import db
+            if not db.is_alert_enabled(default=True):
+                _logger.info(f"告警已关闭（alert_enabled=false），跳过邮件: [{level}] {subject}")
+                return
+
             # 项目内的 email/ 目录与 Python 标准库 email 同名会冲突，
             # 这里用 importlib 从绝对路径加载，绕开命名冲突
             spec = importlib.util.spec_from_file_location('send_assistant', EMAIL_MODULE_PATH)
@@ -91,8 +101,21 @@ class AlertUtils:
             email_addr = os.environ.get('email', '').strip()
             email_pwd = os.environ.get('password', '').strip()
             if not email_addr or not email_pwd:
-                print("告警邮件未发送：未配置 email/password 环境变量")
+                _logger.warning("告警邮件未发送：未配置 email/password 环境变量")
                 return
+
+            # 收件人：settings 表 alert_recipients（逗号分隔邮箱，管理后台可配，
+            # 多收件人并存）；未配置时回退为发件人自身（向后兼容）。
+            # 注意：发送账号/授权码仍用 .env（不发邮箱类型仅影响 smtp 服务器选择，与收件人无关）
+            recipients = [email_addr]
+            try:
+                from admin import db
+                raw = db.get_effective_str('alert_recipients', '')
+                custom = [m.strip() for m in raw.split(',') if m.strip() and '@' in m]
+                if custom:
+                    recipients = custom
+            except Exception:
+                pass
 
             # 根据 .env 的邮箱地址推断类型（qq/163 等），默认 qq
             email_type = 'qq'
@@ -112,16 +135,26 @@ class AlertUtils:
                 password=email_pwd,
                 from_addr=email_addr,
             )
-            # 用 HTML 格式发送（绕过纯文本的 send_notification）
+            # 用 HTML 格式发送（绕过纯文本的 send_notification）；多收件人并存
             sent = notifier.send(
-                to_addrs=[email_addr],
+                to_addrs=recipients,
                 subject=f"[{'故障告警' if level == 'error' else '服务恢复'}] {subject}",
                 content=html_content,
                 content_type='html',
             )
             if sent:
-                print(f"告警邮件已发送: [{level}] {subject}")
+                _logger.info(f"告警邮件已发送: [{level}] {subject}")
+                try:
+                    from admin import db
+                    db.record_event('INFO', 'alerts', f"告警邮件已发送: [{level}] {subject}")
+                except Exception:
+                    pass
             else:
-                print(f"告警邮件发送失败: [{level}] {subject}")
+                _logger.warning(f"告警邮件发送失败: [{level}] {subject}")
+                try:
+                    from admin import db
+                    db.record_event('WARNING', 'alerts', f"告警邮件发送失败: [{level}] {subject}")
+                except Exception:
+                    pass
         except Exception as e:
-            print(f"发送告警邮件出错: {str(e)}")
+            _logger.warning(f"发送告警邮件出错: {str(e)}")

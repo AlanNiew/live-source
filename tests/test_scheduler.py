@@ -1,12 +1,22 @@
 """调度测试：检测时段窗口计算（GMT+8 8:00-24:00）"""
 import datetime
+import os
+import tempfile
 import unittest
+from unittest import mock
 
 from config import GMT8
 from monitoring.scheduler import MonitorScheduler
 
 
 class WindowWaitTest(unittest.TestCase):
+    """隔离管理库（未初始化路径），保证窗口回退 config 默认 8-24 的确定性"""
+
+    def setUp(self):
+        self.db_patcher = mock.patch('admin.db.ADMIN_DB_PATH',
+                                     os.path.join(tempfile.mkdtemp(), 'uninit.db'))
+        self.db_patcher.start()
+        self.addCleanup(self.db_patcher.stop)
 
     def _t(self, hour, minute=0, second=0):
         return datetime.datetime(2026, 8, 11, hour, minute, second, tzinfo=GMT8)

@@ -87,6 +87,18 @@ class AggregatorFilterTest(unittest.TestCase):
         rec = json.load(open(self.fail_path, encoding='utf-8'))
         self.assertNotIn('http://old/gone.m3u8', rec)
 
+    def test_db_stream_fail_limit_override(self):
+        """stream_fail_limit 动态读取：DB=1 时第一轮失败即丢弃"""
+        with mock.patch('admin.db.ADMIN_DB_PATH',
+                        os.path.join(tempfile.mkdtemp(), 't.db')) as _:
+            from admin import db as admin_db
+            admin_db.init_db()
+            admin_db.set_setting('stream_fail_limit', '1')
+            channels = self._build()
+            self.results = {'http://bad/bjws.m3u8': False}
+            kept = AggregatorUtils.filter_unreachable(channels)
+        self.assertEqual([c['name'] for c in kept], ['CCTV-1 综合'])
+
 
 class AggregateLockTest(unittest.TestCase):
     """聚合互斥锁与首请求降级测试"""
@@ -118,10 +130,11 @@ class AggregateLockTest(unittest.TestCase):
         AggregatorUtils._aggregate_lock.release()
 
     def test_load_degrades_when_aggregating(self):
-        """无缓存且后台聚合进行中（锁被占）：load 降级返回官方源列表，不阻塞"""
+        """无缓存且后台聚合进行中（锁被占）：load 降级返回官方源列表，不阻塞（正式模式）"""
         AggregatorUtils._aggregate_lock.acquire()
         try:
-            with mock.patch('core.aggregator.os.path.exists', return_value=False), \
+            with mock.patch('core.aggregator.BILIBILI_ONLY_MODE', False), \
+                 mock.patch('core.aggregator.os.path.exists', return_value=False), \
                  mock.patch.object(AggregatorUtils, 'get_hntv_only_m3u',
                                    return_value="#EXTM3U\n# 降级测试\n"):
                 content = AggregatorUtils.load_aggregated_m3u()
@@ -138,9 +151,50 @@ class AggregateLockTest(unittest.TestCase):
         self.assertEqual(content, "#EXTM3U\n# 完整聚合\n")
 
 
+class RefreshCallbackTest(unittest.TestCase):
+    """聚合落盘后触发刷新回调（app 层据此清播放列表缓存）"""
+
+    def setUp(self):
+        # 隔离管理库（未初始化路径 → 关键事件落库静默失败），避免污染真实 admin.db
+        self.db_patcher = mock.patch('admin.db.ADMIN_DB_PATH',
+                                     os.path.join(tempfile.mkdtemp(), 'uninit.db'))
+        self.db_patcher.start()
+        self.addCleanup(self.db_patcher.stop)
+
+    def tearDown(self):
+        import core.aggregator as agg
+        agg._refresh_callbacks.clear()
+
+    def test_callback_fired_after_full_aggregation(self):
+        """_get_aggregated_m3u_locked 成功落盘后回调触发一次"""
+        import core.aggregator as agg
+        calls = []
+        agg.register_refresh_callback(lambda: calls.append(1))
+        with mock.patch('core.aggregator.BILIBILI_ONLY_MODE', False), \
+             mock.patch.object(AggregatorUtils, 'fetch_hntv_channels', return_value=[]), \
+             mock.patch.object(AggregatorUtils, 'prepare_public_channels', return_value=[]), \
+             mock.patch.object(AggregatorUtils, '_save_public_channels'), \
+             mock.patch.object(AggregatorUtils, 'fetch_bilibili_channels', return_value=[]), \
+             mock.patch('core.aggregator.atomic_write_text'):
+            AggregatorUtils._get_aggregated_m3u_locked()
+        self.assertEqual(calls, [1])
+
+    def test_callback_exception_does_not_break_aggregation(self):
+        """回调抛异常：吞掉，不影响聚合返回"""
+        import core.aggregator as agg
+        agg.register_refresh_callback(lambda: (_ for _ in ()).throw(RuntimeError('boom')))
+        with mock.patch('core.aggregator.BILIBILI_ONLY_MODE', False), \
+             mock.patch.object(AggregatorUtils, 'fetch_hntv_channels', return_value=[]), \
+             mock.patch.object(AggregatorUtils, 'prepare_public_channels', return_value=[]), \
+             mock.patch.object(AggregatorUtils, '_save_public_channels'), \
+             mock.patch.object(AggregatorUtils, 'fetch_bilibili_channels', return_value=[]), \
+             mock.patch('core.aggregator.atomic_write_text'):
+            content = AggregatorUtils._get_aggregated_m3u_locked()
+        self.assertIn('#EXTM3U', content)
+
+
 class SourceUtilsTest(unittest.TestCase):
     """公开源解析/评分/过滤逻辑测试"""
-
     def test_parse_m3u_with_line_suffix(self):
         """多线路后缀（$ 线路标记 / ; 备选地址）清洗"""
         m3u = (

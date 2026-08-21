@@ -1,0 +1,57 @@
+{% extends "admin/base.html" %}
+{% block title %}登录{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-center" style="min-height: 80vh;">
+  <div class="col-md-4 col-lg-3">
+    <div class="card border-0" style="border-radius: 1.1rem;">
+      <div class="card-body p-4">
+        <div class="text-center mb-4">
+          <div class="d-inline-flex align-items-center justify-content-center rounded-4 mb-3"
+               style="width: 56px; height: 56px; background: linear-gradient(135deg, #4f6ef7, #7b5cf0);">
+            <i class="bi bi-broadcast-pin text-white fs-3"></i>
+          </div>
+          <h4 class="fw-bold mb-1">HNTV 管理后台</h4>
+          <div class="text-secondary small">直播源 · 频道 · 监控 · 日志</div>
+        </div>
+        {% if disabled %}
+        <div class="alert alert-warning mb-0 small">
+          <i class="bi bi-exclamation-triangle me-1"></i>
+          管理功能未启用：请在 <code>.env</code> 配置 <code>ADMIN_PASSWORD</code> 后重启服务。
+        </div>
+        {% else %}
+        <form id="loginForm">
+          <div class="mb-3">
+            <label class="form-label small fw-semibold" for="password">管理密码</label>
+            <div class="input-group">
+              <span class="input-group-text"><i class="bi bi-lock"></i></span>
+              <input type="password" class="form-control" id="password"
+                     autocomplete="current-password" required autofocus placeholder="请输入管理密码">
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100"
+                  style="background: linear-gradient(135deg,#4f6ef7,#7b5cf0); border: none;">
+            <i class="bi bi-box-arrow-in-right me-1"></i>登 录
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  btnLoading(btn, true, '登录中…');
+  try {
+    await api('/api/admin/login', 'POST', {password: document.getElementById('password').value});
+    location.href = '/admin';
+  } catch (err) {
+    toast(err.message, false);
+    btnLoading(btn, false);
+  }
+});
+</script>
+{% endblock %}

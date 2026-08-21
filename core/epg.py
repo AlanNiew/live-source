@@ -6,6 +6,9 @@ import os
 from config import GMT8, GZ_FILE_PATH, XML_FILE_PATH
 from core.atomic_io import atomic_write_gzip, atomic_write_text
 from core.hntv_client import ApiUtils
+from core.logger import get_logger
+
+_logger = get_logger('epg')
 
 
 class TimeUtils:
@@ -103,10 +106,10 @@ class XmlUtils:
             xml_content = XmlUtils._fetch_xml_content()
             atomic_write_text(XML_FILE_PATH, xml_content)
             atomic_write_gzip(GZ_FILE_PATH, xml_content)
-            print(f"XML数据已保存到 {XML_FILE_PATH} 和 {GZ_FILE_PATH}")
+            _logger.info(f"XML数据已保存到 {XML_FILE_PATH} 和 {GZ_FILE_PATH}")
             return xml_content
         except Exception as e:
-            print(f"获取并保存XML数据时出错: {str(e)}")
+            _logger.warning(f"获取并保存XML数据时出错: {str(e)}")
             return XmlUtils.EMPTY_XML
 
     @staticmethod
@@ -126,7 +129,7 @@ class XmlUtils:
                 # 如果文件不存在，获取并保存数据
                 return XmlUtils.get_and_save_xml_data()
         except Exception as e:
-            print(f"从文件加载XML数据时出错: {str(e)}")
+            _logger.warning(f"从文件加载XML数据时出错: {str(e)}")
             return XmlUtils.EMPTY_XML
 
     @staticmethod

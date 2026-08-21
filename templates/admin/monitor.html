@@ -1,0 +1,156 @@
+{% extends "admin/base.html" %}
+{% block title %}监控{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <div>
+    <div class="page-title"><i class="bi bi-activity me-2 text-primary"></i>监控</div>
+    <div class="text-secondary small">常规健康检测（10 分钟一轮）与全量流探测（30 分钟一轮）</div>
+  </div>
+  <button class="btn btn-soft btn-sm" id="reloadBtn"><i class="bi bi-arrow-clockwise me-1"></i>刷新</button>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon" id="healthIcon"><i class="bi bi-heart-pulse"></i></div>
+        <div class="overflow-hidden">
+          <div class="text-secondary small">常规健康状态</div>
+          <div class="fs-5 fw-bold" id="sumHealth">…</div>
+          <div class="small text-secondary" id="sumLastCheck">最近检测：—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon" id="streamIcon"><i class="bi bi-water"></i></div>
+        <div class="overflow-hidden">
+          <div class="text-secondary small">流探测状态</div>
+          <div class="fs-5 fw-bold" id="sumStream">…</div>
+          <div class="small text-secondary" id="sumStreamFail">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body d-flex align-items-center gap-3">
+        <div class="stat-icon bg-primary-subtle text-primary"><i class="bi bi-hdd-network"></i></div>
+        <div class="overflow-hidden">
+          <div class="text-secondary small">最近一轮</div>
+          <div class="fs-5 fw-bold" id="sumChannels">—</div>
+          <div class="small text-secondary">频道数 / EPG KB</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header"><i class="bi bi-clock-history me-1"></i>健康检测历史（新→旧）</div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead><tr><th>时间</th><th>health</th><th>m3u</th><th class="d-none d-md-table-cell">epg</th><th>频道数</th><th>结果</th></tr></thead>
+            <tbody id="historyBody"><tr><td colspan="6" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="p-3" id="historyPager"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card h-100">
+      <div class="card-header d-flex align-items-center">
+        <span><i class="bi bi-list-check me-1"></i>流探测明细</span>
+        <div class="form-check form-switch mb-0 ms-auto">
+          <input class="form-check-input" type="checkbox" id="onlyBad">
+          <label class="form-check-label small" for="onlyBad">仅看不可达</label>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height: 520px; overflow-y: auto;">
+          <table class="table table-hover mb-0">
+            <thead class="sticky-top bg-white"><tr><th>时间</th><th>分组</th><th>频道</th><th class="d-none d-md-table-cell">轮次</th><th>结果</th></tr></thead>
+            <tbody id="streamsBody"><tr><td colspan="5" class="text-center text-secondary">加载中…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="p-3" id="streamsPager"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+let historyPage = 1, streamsPage = 1;
+const pageSize = 20;
+
+function setStat(iconId, valueId, ok, label, subId, subText) {
+  document.getElementById(iconId).className =
+    `stat-icon ${ok ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'}`;
+  document.getElementById(valueId).innerHTML =
+    `<span class="badge text-bg-${ok ? 'success' : 'danger'}">${esc(label)}</span>`;
+  document.getElementById(subId).textContent = subText;
+}
+
+async function loadSummary() {
+  try {
+    const s = await api('/api/admin/monitor/summary');
+    const ok = v => v === 'OK';
+    setStat('healthIcon', 'sumHealth', ok(s.health.status), s.health.status,
+            'sumLastCheck', `最近检测：${s.last_check ? s.last_check.ts : '—'}`);
+    setStat('streamIcon', 'sumStream', ok(s.stream.status), s.stream.status,
+            'sumStreamFail', `连续失败 ${s.stream.fail_count} 次`);
+    document.getElementById('sumChannels').textContent =
+      s.last_check ? `${s.last_check.channel_count} / ${s.last_check.epg_size}` : '—';
+  } catch (err) { toast(err.message, false); }
+}
+
+async function loadHistory() {
+  try {
+    const data = await api(`/api/admin/monitor/history?page=${historyPage}&page_size=${pageSize}`);
+    const tb = document.getElementById('historyBody');
+    tb.innerHTML = data.items.length ? data.items.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td>${r.health_ok ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-danger"></i>'}</td>
+        <td>${r.m3u_ok ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-danger"></i>'}</td>
+        <td class="d-none d-md-table-cell">${r.epg_ok ? '<i class="bi bi-check-circle text-success"></i>' : '<i class="bi bi-x-circle text-danger"></i>'}</td>
+        <td>${esc(r.channel_count)}</td>
+        <td><span class="badge text-bg-${r.overall ? 'success' : 'danger'}">${r.overall ? 'OK' : 'FAIL'}</span></td>
+      </tr>`).join('') : emptyRow(6, '暂无历史', 'bi-clock-history');
+    renderPager(document.getElementById('historyPager'), data, p => { historyPage = p; loadHistory(); });
+  } catch (err) { toast(err.message, false); }
+}
+
+async function loadStreams() {
+  try {
+    const bad = document.getElementById('onlyBad').checked ? '&unreachable=1' : '';
+    const data = await api(`/api/admin/monitor/streams?page=${streamsPage}&page_size=${pageSize}${bad}`);
+    const tb = document.getElementById('streamsBody');
+    tb.innerHTML = data.items.length ? data.items.map(r => `
+      <tr>
+        <td class="text-nowrap small">${esc(r.ts)}</td>
+        <td><span class="badge text-bg-light border">${esc(r.group_name)}</span></td>
+        <td class="fw-semibold">${esc(r.channel_name)}</td>
+        <td class="text-secondary small d-none d-md-table-cell">${esc(r.round_id)}</td>
+        <td><span class="badge text-bg-${r.ok ? 'success' : 'danger'}">${r.ok ? '可达' : '不可达'}</span></td>
+      </tr>`).join('') : emptyRow(5, '暂无探测记录', 'bi-list-check');
+    renderPager(document.getElementById('streamsPager'), data, p => { streamsPage = p; loadStreams(); });
+  } catch (err) { toast(err.message, false); }
+}
+
+document.getElementById('onlyBad').addEventListener('change', () => { streamsPage = 1; loadStreams(); });
+document.getElementById('reloadBtn').addEventListener('click', () => {
+  loadSummary(); loadHistory(); loadStreams();
+});
+loadSummary();
+loadHistory();
+loadStreams();
+</script>
+{% endblock %}
