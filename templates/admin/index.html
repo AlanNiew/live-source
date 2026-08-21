@@ -66,7 +66,7 @@
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-hover mb-0">
-            <thead><tr><th>时间</th><th>状态</th><th>频道数</th><th>EPG(KB)</th></tr></thead>
+            <thead><tr><th>时间</th><th>状态</th><th>频道数</th><th class="d-none d-sm-table-cell">EPG(KB)</th></tr></thead>
             <tbody id="historyBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
           </table>
         </div>
@@ -82,7 +82,7 @@
       <div class="card-body p-0">
         <div class="table-responsive">
           <table class="table table-hover mb-0">
-            <thead><tr><th>时间</th><th>级别</th><th>模块</th><th>内容</th></tr></thead>
+            <thead><tr><th>时间</th><th>级别</th><th class="d-none d-md-table-cell">模块</th><th>内容</th></tr></thead>
             <tbody id="logsBody"><tr><td colspan="4" class="text-center text-secondary">加载中…</td></tr></tbody>
           </table>
         </div>
@@ -167,7 +167,7 @@ async function load() {
         <td class="text-nowrap small">${esc(r.ts)}</td>
         <td>${badge(r.overall === 1, r.overall === 1 ? 'OK' : 'FAIL')}</td>
         <td>${esc(r.channel_count)}</td>
-        <td>${esc(r.epg_size)}</td>
+        <td class="d-none d-sm-table-cell">${esc(r.epg_size)}</td>
       </tr>`).join('') : emptyRow(4, '暂无检测记录', 'bi-clock-history');
 
     const lb = document.getElementById('logsBody');
@@ -175,8 +175,8 @@ async function load() {
       <tr>
         <td class="text-nowrap small">${esc(r.ts)}</td>
         <td>${levelBadge(r.level)}</td>
-        <td><span class="badge text-bg-light border">${esc(r.module)}</span></td>
-        <td class="text-truncate" style="max-width: 240px" title="${esc(r.message)}">${esc(r.message)}</td>
+        <td class="d-none d-md-table-cell"><span class="badge text-bg-light border">${esc(r.module)}</span></td>
+        <td class="text-ellipsis" style="max-width: 240px" title="${esc(r.message)}">${esc(r.message)}</td>
       </tr>`).join('') : emptyRow(4, '暂无日志', 'bi-journal-text');
   } catch (err) {
     toast(err.message, false);

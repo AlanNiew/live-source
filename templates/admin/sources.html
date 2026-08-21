@@ -1,12 +1,12 @@
 {% extends "admin/base.html" %}
 {% block title %}源管理{% endblock %}
 {% block content %}
-<div class="d-flex align-items-center justify-content-between mb-3">
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
   <div>
     <div class="page-title"><i class="bi bi-rss me-2 text-primary"></i>源管理</div>
     <div class="text-secondary small">公开 m3u 源与 B 站房间的增删启停；变更后自动后台聚合</div>
   </div>
-  <div class="d-flex gap-2">
+  <div class="page-actions">
     <button class="btn btn-soft btn-sm" id="importBtn" hidden><i class="bi bi-download me-1"></i>导入默认源</button>
     <button class="btn btn-soft btn-sm" id="refreshBtn"><i class="bi bi-arrow-clockwise me-1"></i>立即刷新</button>
     <button class="btn btn-primary btn-sm" data-bs-toggle="collapse" data-bs-target="#addCard">
@@ -109,9 +109,7 @@ async function load() {
       } catch (err) { toast(err.message, false); cb.checked = !cb.checked; }
     }));
 
-    tb.querySelectorAll('[data-copy]').forEach(td => td.addEventListener('click', () => {
-      copyText(td.dataset.copy);
-    }));
+    tb.querySelectorAll('[data-copy]').forEach(td => makeCopyable(td, td.dataset.copy));
 
     tb.querySelectorAll('[data-act=edit]').forEach(btn => btn.addEventListener('click', async () => {
       const values = await formDialog({

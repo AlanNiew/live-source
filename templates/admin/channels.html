@@ -110,9 +110,7 @@ async function load() {
       } catch (err) { toast(err.message, false); cb.checked = !cb.checked; }
     }));
 
-    tb.querySelectorAll('[data-copy]').forEach(td => td.addEventListener('click', () => {
-      copyText(td.dataset.copy);
-    }));
+    tb.querySelectorAll('[data-copy]').forEach(td => makeCopyable(td, td.dataset.copy));
 
     tb.querySelectorAll('[data-act=edit]').forEach(btn => btn.addEventListener('click', async () => {
       const values = await formDialog({

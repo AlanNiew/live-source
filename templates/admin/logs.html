@@ -69,9 +69,7 @@ async function load() {
         <td class="d-none d-md-table-cell"><span class="badge text-bg-light border">${esc(r.module)}</span></td>
         <td class="text-ellipsis text-ellipsis-md" data-copy="${esc(r.message)}" title="点击复制">${esc(r.message)}</td>
       </tr>`).join('') : emptyRow(4, '暂无日志', 'bi-journal-text');
-    tb.querySelectorAll('[data-copy]').forEach(td => td.addEventListener('click', () => {
-      copyText(td.dataset.copy);
-    }));
+    tb.querySelectorAll('[data-copy]').forEach(td => makeCopyable(td, td.dataset.copy));
     renderPager(document.getElementById('pagerBox'), data, p => { page = p; load(); });
   } catch (err) {
     toast(err.message, false);
