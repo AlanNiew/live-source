@@ -150,10 +150,12 @@ gunicorn -c gunicorn.conf.py main:app
 ## 测试
 
 ```bash
-python -m unittest discover tests
+python -m unittest discover -s tests -t .
 ```
 
 标准库 unittest，无外部依赖；探测类测试起本地 HTTP 服务模拟，不触碰真实直播源。
+
+必须带 `-t .`：`tests/__init__.py` 会把 `config` 的所有落盘路径重定向到一次性临时目录，只有按包导入才会先执行该 `__init__`；否则测试会污染真实 `xml_data/`。
 
 ## 架构要点
 

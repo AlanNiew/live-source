@@ -6,7 +6,8 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 - 启动（开发）：`python main.py` —— 监听 `0.0.0.0:5002`
 - 生产：`gunicorn -c gunicorn.conf.py main:app`
-- 测试：`python -m unittest discover tests`（标准库 unittest，无外部依赖；探测类测试起本地 HTTP 服务，不碰真实直播源）
+- 测试：`python -m unittest discover -s tests -t .`（标准库 unittest，无外部依赖；探测类测试起本地 HTTP 服务，不碰真实直播源）
+  - **命令必须带 `-t .`**：`tests/__init__.py` 会把 `config` 的全部落盘路径重定向到一次性临时目录（测试结束自动删除），但只有按包导入（`tests.test_*`）才会先执行包 `__init__`；用老的 `discover tests` 会绕过隔离、污染真实 `xml_data/`（app.log / admin.db / bilibili_rooms.json）
 - 依赖安装走清华镜像：`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt`
 - 无 lint/format 配置。改完验证：跑 unittest + 起服务 curl `/health`、`/api/live.m3u8`、`/api/live.xml`、`/api/live.xml.gz`
 
