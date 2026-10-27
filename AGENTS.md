@@ -15,7 +15,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 - `main.py`：入口薄层（`create_app()` + `scheduling.start_all()`）；`app.py`：Flask 工厂与全部路由
 - `config.py`：**全部常量/环境变量集中**（token/密钥/路径/阈值/源列表/时区），`load_dotenv` 唯一入口
-- `core/`（业务核心，零 Flask 依赖）：`hntv_client.py`（HNTV 官方 API 鉴权与请求）、`epg.py`（EPG XML）、`sources.py`（公开源拉取/解析/评分/过滤）、`aggregator.py`（聚合编排/探测过滤/缓存/降级）、`probing.py`（流探测单实现）、`music.py`（ge-whale-music 网易云接口代理 + 歌单管理，仅元数据转发不做流反代）
+- `core/`（业务核心，零 Flask 依赖）：`hntv_client.py`（HNTV 官方 API 鉴权与请求）、`epg.py`（EPG XML）、`sources.py`（公开源拉取/解析/评分/过滤）、`aggregator.py`（聚合编排/探测过滤/缓存/降级 + B 站频道合并）、`probing.py`（流探测单实现）、`bilibili.py`（B 站直播：房间解析/流解析/m3u8 重写/分片反代/动态房间管理）、`atomic_io.py`（原子写：临时文件 + `os.replace`，崩溃不留半文件）、`logger.py`（统一日志：stdout + 滚动文件 + SQLite WARNING+）、`music.py`（ge-whale-music 网易云接口代理 + 歌单管理，仅元数据转发不做流反代）
 - `admin/`（管理后台）：`db.py`（SQLite 数据层，零依赖，被 core/monitoring 单向引用；含 get_effective_* 运行时设置读取）、`api.py`（/api/admin/* Blueprint，session 鉴权）、`web.py`（/admin/* 页面路由）；页面模板在 `templates/admin/`（Bootstrap CDN + 原生 fetch，数据全部走管理 API，含「设置」页管理运行时配置）
 - `monitoring/`：`checks.py`（检测项+两套状态机）、`alerts.py`（邮件 HTML+发送）、`scheduler.py`（检测循环+时段窗口）
 - `scheduling.py`：三个 daemon 线程统一入口 `start_all()`
@@ -24,7 +24,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 ## 环境变量（.env）
 
-键：`API_TOKEN`、`HNTV_SECRET_KEY`、`ADMIN_PASSWORD`（管理后台登录密码，**默认空 = 管理功能整体禁用**）、`email`、`password`（QQ/163 邮箱授权码）。`.env` 已被 git 移除跟踪（历史中已清除，见 `.env.example` 打码模板），**不要提交或打印其内容**。
+键：`API_TOKEN`、`HNTV_SECRET_KEY`、`ADMIN_PASSWORD`（管理后台登录密码，**默认空 = 管理功能整体禁用**）、`email`、`password`（QQ/163 邮箱授权码）、`BILIBILI_COOKIE`、`BILIBILI_ONLY_MODE`、`BILIBILI_DIRECT_SEGMENTS`、`PUBLIC_BASE_URL`、`MUSIC_API_BASE`。`.env` 已被 git 移除跟踪（历史中已清除，见 `.env.example` 打码模板），**不要提交或打印其内容**。
 
 - `API_TOKEN` / `HNTV_SECRET_KEY` 在 `config.py` 有弱默认值兜底（`hntv-secret-token-2025` / `6ca114a836ac7d73`），生产必须显式覆盖
 - 上游 HNTV API 鉴权 = `timestamp` + `sign` 两个请求头，`sign = sha256(SECRET_KEY + timestamp)`（`core/hntv_client.py:CryptoUtils`）
@@ -33,7 +33,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 ## 架构与运行关键点
 
-- `app.py` 路由：`/api/proxy`、`/api/generate-sign`（需 Bearer token）、`/api/live.m3u8`、`/api/live.xml`、`/api/live.xml.gz`、`/health`、`/api/music/*`（歌单列表/详情/搜索/播放地址/歌词 + 歌单增删，POST/DELETE 需 Bearer token）、`/api/admin/*`（管理 API，session 鉴权，`ADMIN_PASSWORD` 空则整体 403）、`/admin/*`（管理页面，未登录 302 跳登录页）
+- `app.py` 路由：`/api/proxy`、`/api/generate-sign`（需 Bearer token）、`/api/live.m3u8`、`/api/live.xml`、`/api/live.xml.gz`、`/health`、`/api/bilibili/*`（`<room_id>/live.m3u8` 代理主清单、`<room_id>/seg/<path>` 分片反代、`<room_id>/status` 开播状态、`rooms` GET 列全部/POST 添加、`rooms/<room_id>` DELETE 删除，写操作需 Bearer token）、`/api/music/*`（歌单列表/详情/搜索/播放地址/歌词 + 歌单增删，POST/DELETE 需 Bearer token）、`/api/admin/*`（管理 API，session 鉴权，`ADMIN_PASSWORD` 空则整体 403）、`/admin/*`（管理页面，未登录 302 跳登录页）
 - **调度线程在导入时启动**：`main.py` 模块顶层调 `start_all()`，gunicorn 导入 `main:app` 即触发。因此 **`GUNICORN_WORKERS` 必须为 1**（`gunicorn.conf.py` 默认已是 1），否则 XML 更新/聚合刷新/健康检测重复执行、告警邮件重复轰炸
 - **`gunicorn.conf.py` 不要开 `preload_app`**：preload 会在 master fork worker 时复制 daemon 线程，导致 worker 锁死（120s 超时被 SIGKILL，健康检测全超时）——踩过的坑，见 commit fd5d9ca
 - 三个后台 daemon 线程（`scheduling.py:start_all`）：XML 每日更新（每天 GMT+8 02:30 刷 EPG）、聚合刷新（**双频率**：公开源每 6h + 官方源每 3h）、健康监控（常规 10 分钟一轮 + 流探测 30 分钟一轮，状态翻转才发邮件）
@@ -46,6 +46,8 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 - `aggregated.m3u`：多源聚合结果（hntv 官方 + 3 个公开源）；`/api/live.m3u8` 读它，无缓存才触发首次生成。**官方源每 3h 刷新（签名有效期约 4h），公开源每 6h 刷新（含探测过滤）**
 - `public_channels.json`：公开源过滤+探测后的频道缓存（官方 1h 刷新时复用，避免频繁拉公开源）
 - `stream_failures.json`：聚合探测的跨轮失败记录（连续两轮失败才丢弃频道）
+- `bilibili_rooms.json`：B 站 uid→room_id 的解析结果磁盘缓存（**不是**频道列表；流地址签名约 4h 过期，内存另有 30 分钟 TTL）
+- `bilibili_custom_rooms.json`：运行时动态添加的 B 站频道（POST/DELETE `/api/bilibili/rooms` 写入，重启不丢；**与上面的解析缓存语义不同，勿混用**）
 - `music_playlists.json`：音乐动态歌单（POST /api/music/playlists 写入，与 config.MUSIC_PLAYLISTS 静态配置合并去重）
 - **改了聚合/过滤逻辑后，手动删除 `xml_data/aggregated.m3u`（和 `stream_failures.json`）再重启**，否则旧结果一直生效
 
@@ -70,6 +72,14 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
   INFO 级为白名单关键事件（`admin/db.py:record_event`：服务启停/聚合完成/告警结果/EPG 更新/管理操作审计）；
   异常用 `logger.exception`（自带堆栈入库）；数据层失败日志经 SqliteHandler 回写有防递归守卫（`_down_until` 冷却）
 
+## B 站直播接入（core/bilibili.py）
+
+- 频道来源：静态 `config.BILIBILI_ROOMS`（`{"name","room_id"}` 推荐，`{"name","uid"}` 走 uid→房间号解析）+ 动态 `bilibili_custom_rooms.json`（POST/DELETE `/api/bilibili/rooms`，需 Bearer token）；聚合时**实测开播才入列表**——`is_live` 实拉 m3u8 主清单 HTTP 200 才算，未开播房间 playUrl 也会返回带签名地址，只看解析结果会误判
+- 流解析顺序：新接口（带 `BILIBILI_COOKIE` 拿高清）→ 旧接口（游客 720P 兜底）→ None；多线路（主→备用）依次尝试，全失败强制重解析（拿新签名）再试一轮；结果内存缓存 `BILIBILI_PLAY_CACHE_TTL=1800` 秒，另有 `bilibili_rooms.json` 磁盘缓存
+- **防盗链**：B 站 CDN 校验 Referer/UA，播放器直连主清单必 403，必须走本服务 `/api/bilibili/<room_id>/live.m3u8` 拉主清单并重写分片地址；分片默认直连 CDN（`BILIBILI_DIRECT_SEGMENTS=true`，实测分片不校验 Referer，省服务器带宽），设 false 回退全代理 `/seg/<path>`（注入 Referer/UA 转拉，B 站收紧防盗链时的兼容兜底）
+- 频道分组固定 `B站直播`（`GROUP_ORDER` 排最后）；`BILIBILI_ONLY_MODE=true` 时只输出 B 站频道且 `MIN_CHANNEL_COUNT` 自动降到 1
+- 详细文档：`BILIBILI_LIVE.md`（实现原理与坑）、`BILIBILI_ROOMS_API.md`（房间管理 API 请求/响应/错误码）
+
 ## 音乐接入（core/music.py）
 
 - 上游是用户自建 ge-whale-music 网易云接口（`MUSIC_API_BASE`，默认 `http://60.204.147.98:15001`），只做**元数据转发**：搜索/歌单详情/单曲详情/播放地址/歌词。播放地址是网易 CDN 直链（带时效签名），由客户端播放器直连，**不写流反代、不占本服务带宽**
@@ -83,4 +93,5 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 - 所有日期/定时/EPG 时间戳均按 **GMT+8** 处理（`config.py:GMT8`），不要用本地时区
 - `git status` 显示 `xml_data/` 未跟踪：`.gitignore` 已排除 `.env`、`__pycache__/`、`*.pyc`、`/.idea/`，**不要把缓存与密钥提交**
 - 容器内无 `.env` 文件是正常的（`.dockerignore` 排除 + `--env-file` 注入），进容器排查用 `env | cut -d= -f1` 看键名
-- `api_usage.md` 与 README 部分过时（如端口、workers 数、旧文件名），以代码为准
+- `BILIBILI_ONLY_MODE` **默认 true（B 站测试模式）**：聚合跳过 hntv 官方源与公开源、只出 B 站频道，且监控阈值自动降到 1。**正式使用必须显式设 `BILIBILI_ONLY_MODE=false`**，否则列表只有 1-2 个 B 站频道（排查「频道怎么只剩几个」先看它）
+- `api_usage.md` 与 README 部分过时（如端口、workers 数、旧文件名），以代码为准；B 站/音乐以 `BILIBILI_LIVE.md`、`BILIBILI_ROOMS_API.md`、AGENTS.md 为准

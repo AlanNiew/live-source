@@ -1,12 +1,13 @@
 # HNTV API
 
-基于 Flask 的河南电视台（HNTV）直播 API 服务：封装 HNTV 官方接口 + 多源 m3u 聚合 + EPG 节目单 + 健康监控邮件告警。面向家庭电视场景，为播放器（盒子/App）提供稳定的直播列表与节目单。
+基于 Flask 的河南电视台（HNTV）直播 API 服务：封装 HNTV 官方接口 + 多源 m3u 聚合 + B 站直播代理 + EPG 节目单 + 网易云音乐元数据转发 + 健康监控邮件告警。面向家庭电视场景，为播放器（盒子/App）提供稳定的直播列表、节目单与音乐数据。
 
 ## 功能特性
 
 - **HNTV 官方接口封装**：带签名鉴权（`timestamp` + `sign`）的直播列表 / EPG 数据代理
 - **多源 m3u 聚合**：HNTV 官方 + 3 个公开源（iptv-org / hujingguang / wwb521），按地址质量择优去重，分组输出（河南卫视 → 央视 → 卫视）
 - **B 站直播接入**：配置 `BILIBILI_ROOMS` 的 UP 主 uid，开播判定后以代理地址加入列表（B 站 CDN 防盗链校验 Referer，播放器直连 403，必须经本服务 m3u8 重写 + 分片反代）
+- **网易云音乐接入**：代理自建 ge-whale-music 接口（搜索/歌单/播放地址/歌词），歌单支持静态配置 + API 动态增删；只转发元数据，播放地址是网易 CDN 直链由客户端直连（不占本服务带宽）
 - **可达性探测过滤**：聚合时对公开源频道做探测，连续两轮不可达才丢弃，保证列表里都是可用源
 - **EPG 节目单**：每日自动生成 XML / gzip 压缩版，供播放器回看/节目信息
 - **健康监控告警**：定期检测服务存活/频道数/EPG/流地址可达性，异常时邮件告警（状态翻转才发，不轰炸）
@@ -146,6 +147,13 @@ gunicorn -c gunicorn.conf.py main:app
 | `GET /api/bilibili/rooms` | 无 | 列出全部 B 站频道（默认附带实时开播状态） |
 | `POST /api/bilibili/rooms` | Bearer token | 动态添加 B 站频道 |
 | `DELETE /api/bilibili/rooms/<room_id>` | Bearer token | 删除动态添加的 B 站频道 |
+| `GET /api/music/playlists` | 无 | 歌单列表（静态配置 + 动态歌单合并去重） |
+| `GET /api/music/playlist` | 无 | 歌单详情（`?id=<playlist_id>`，分页） |
+| `GET /api/music/search` | 无 | 网易云搜索（`?keywords=&limit=`） |
+| `GET /api/music/play` | 无 | 播放地址（`?id=<music_id>[&level=]`，返回网易 CDN 直链） |
+| `GET /api/music/lyrics` | 无 | 歌词（`?id=<music_id>`） |
+| `POST /api/music/playlists` | Bearer token | 添加动态歌单 |
+| `DELETE /api/music/playlists/<playlist_id>` | Bearer token | 删除动态歌单 |
 
 ## 测试
 
@@ -163,6 +171,7 @@ python -m unittest discover -s tests -t .
 - **磁盘缓存**（`xml_data/`）：`live.xml(.gz)` 每天 02:30 刷新、`aggregated.m3u` 每 6h 刷新、`stream_failures.json` 探测失败跨轮记录。改动聚合逻辑后删除 `aggregated.m3u` 再重启验证
 - **监控告警**：常规检测 10 分钟一轮 + 流探测 30 分钟一轮，仅 GMT+8 8:00-24:00 执行；分组分级阈值（河南卫视 90% / 央视 80% / 卫视 20%），卫视不达标仅日志展示；状态翻转才发邮件
 - **所有时间按 GMT+8** 处理，不依赖容器时区
+- **B 站 / 音乐细节**：B 站实现与坑见 `BILIBILI_LIVE.md`，房间管理 API 见 `BILIBILI_ROOMS_API.md`；音乐（ge-whale-music 字段/歌单合并规则）见 AGENTS.md「音乐接入」
 
 ## 注意事项
 
@@ -170,3 +179,4 @@ python -m unittest discover -s tests -t .
 - 项目内 `email/` 目录与标准库 `email` 同名冲突，新代码请勿 `import email`
 - 免费公开卫视源可达率天然较低（约 20-40%），聚合已做探测过滤与分组排序优化；央视与河南卫视官方源保持稳定
 - **B 站直播**：接口非官方可能随时改版；未开播房间 `playUrl` 也会返回地址，以实测拉取 m3u8 主清单 200 判定在播；`PUBLIC_BASE_URL` 环境变量需指向播放器可达的地址（容器部署必须覆盖为宿主机映射地址），否则列表里的 B 站频道对播放器不可用
+- **B 站测试模式**：`BILIBILI_ONLY_MODE` 默认 `true`（聚合跳过官方/公开源、只出 B 站频道，监控频道数阈值自动降到 1）；正式使用必须显式设 `BILIBILI_ONLY_MODE=false`
