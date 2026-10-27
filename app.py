@@ -13,6 +13,7 @@ from core.aggregator import AggregatorUtils, register_refresh_callback
 from core.bilibili import BilibiliUtils
 from core.epg import XmlUtils
 from core.hntv_client import CryptoUtils, TokenUtils
+from core.music import MusicUtils
 
 
 def create_app():
@@ -223,6 +224,119 @@ def create_app():
                 'status': 'success',
                 'message': f'已删除房间 {room_id}',
                 'rooms': rooms,
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # ------------------------------------------------------------ 音乐
+
+    @app.route('/api/music/playlists', methods=['GET'])
+    def music_playlists():
+        """歌单列表（无鉴权）：静态配置 + 动态添加合并去重，返回 [{id, name}]"""
+        return jsonify({'playlists': MusicUtils.list_playlists()})
+
+    @app.route('/api/music/playlist', methods=['GET'])
+    def music_playlist_detail():
+        """歌单详情（无鉴权）：?id=&pageNum=&pageSize= 转发上游，返回歌单信息+歌曲分页"""
+        playlist_id = flask_request.args.get('id', '').strip()
+        if not playlist_id:
+            return jsonify({'error': '缺少歌单 id 参数'}), 400
+        try:
+            page_num = int(flask_request.args.get('pageNum', 1))
+            page_size = int(flask_request.args.get('pageSize', 50))
+        except ValueError:
+            return jsonify({'error': 'pageNum/pageSize 必须为整数'}), 400
+        page_num = max(1, page_num)
+        page_size = min(max(1, page_size), 100)
+
+        code, message, data = MusicUtils.playlist_detail(playlist_id, page_num, page_size)
+        if code != 200 or data is None:
+            return jsonify({'error': f'获取歌单失败（code={code} {message}）'}), 502
+        return jsonify({'data': data})
+
+    @app.route('/api/music/search', methods=['GET'])
+    def music_search():
+        """搜索歌曲（无鉴权）：?keyword=&limit= 转发上游"""
+        keyword = (flask_request.args.get('keyword') or '').strip()
+        if not keyword:
+            return jsonify({'error': '缺少 keyword 参数'}), 400
+        try:
+            limit = int(flask_request.args.get('limit', 10))
+        except ValueError:
+            return jsonify({'error': 'limit 必须为整数'}), 400
+        limit = min(max(1, limit), 50)
+
+        code, message, data = MusicUtils.search(keyword, limit)
+        if code != 200 or data is None:
+            return jsonify({'error': f'搜索失败（code={code} {message}）'}), 502
+        return jsonify({'tracks': data})
+
+    @app.route('/api/music/play', methods=['GET'])
+    def music_play():
+        """获取歌曲播放地址（无鉴权）：?id=&level= 转发上游，data.url 为网易 CDN 直链"""
+        music_id = flask_request.args.get('id', '').strip()
+        if not music_id:
+            return jsonify({'error': '缺少歌曲 id 参数'}), 400
+        level = flask_request.args.get('level', 'exhigh')
+
+        code, message, data = MusicUtils.player_url(music_id, level)
+        if code != 200 or not data or not data.get('url'):
+            return jsonify({'error': f'获取播放地址失败（code={code} {message}）'}), 502
+        return jsonify({'url': data['url'], 'level': level})
+
+    @app.route('/api/music/lyrics', methods=['GET'])
+    def music_lyrics():
+        """获取歌词（无鉴权）：?id= 转发上游（第一期客户端未展示，预留）"""
+        music_id = flask_request.args.get('id', '').strip()
+        if not music_id:
+            return jsonify({'error': '缺少歌曲 id 参数'}), 400
+
+        code, message, data = MusicUtils.lyrics(music_id)
+        if code != 200 or data is None:
+            return jsonify({'error': f'获取歌词失败（code={code} {message}）'}), 502
+        return jsonify({'data': data})
+
+    @app.route('/api/music/playlists', methods=['POST'])
+    def music_add_playlist():
+        """动态添加歌单（需 token）：body={"id":"123456","name":"可选"}，立即生效"""
+        token = _extract_token()
+        if not token or not TokenUtils.verify_token(token):
+            abort(401, description="Missing or invalid token")
+
+        data = flask_request.get_json(silent=True) or {}
+        playlist_id = (data.get('id') or '').strip()
+        name = (data.get('name') or '').strip()
+
+        if not playlist_id.isdigit():
+            return jsonify({'error': '歌单 id 必须为纯数字'}), 400
+
+        try:
+            playlists = MusicUtils.add_playlist(playlist_id, name or None)
+            return jsonify({
+                'status': 'success',
+                'message': f'已添加歌单（id={playlist_id}）',
+                'playlists': playlists,
+            })
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/music/playlists/<playlist_id>', methods=['DELETE'])
+    def music_delete_playlist(playlist_id):
+        """删除动态歌单（需 token）；静态配置里的歌单不受影响"""
+        token = _extract_token()
+        if not token or not TokenUtils.verify_token(token):
+            abort(401, description="Missing or invalid token")
+
+        try:
+            removed, playlists = MusicUtils.remove_playlist(playlist_id)
+            if not removed:
+                return jsonify({'error': f'歌单 {playlist_id} 不在动态列表中'}), 404
+            return jsonify({
+                'status': 'success',
+                'message': f'已删除歌单 {playlist_id}',
+                'playlists': playlists,
             })
         except Exception as e:
             return jsonify({'error': str(e)}), 500

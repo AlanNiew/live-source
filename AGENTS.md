@@ -14,7 +14,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 - `main.py`：入口薄层（`create_app()` + `scheduling.start_all()`）；`app.py`：Flask 工厂与全部路由
 - `config.py`：**全部常量/环境变量集中**（token/密钥/路径/阈值/源列表/时区），`load_dotenv` 唯一入口
-- `core/`（业务核心，零 Flask 依赖）：`hntv_client.py`（HNTV 官方 API 鉴权与请求）、`epg.py`（EPG XML）、`sources.py`（公开源拉取/解析/评分/过滤）、`aggregator.py`（聚合编排/探测过滤/缓存/降级）、`probing.py`（流探测单实现）
+- `core/`（业务核心，零 Flask 依赖）：`hntv_client.py`（HNTV 官方 API 鉴权与请求）、`epg.py`（EPG XML）、`sources.py`（公开源拉取/解析/评分/过滤）、`aggregator.py`（聚合编排/探测过滤/缓存/降级）、`probing.py`（流探测单实现）、`music.py`（ge-whale-music 网易云接口代理 + 歌单管理，仅元数据转发不做流反代）
 - `admin/`（管理后台）：`db.py`（SQLite 数据层，零依赖，被 core/monitoring 单向引用；含 get_effective_* 运行时设置读取）、`api.py`（/api/admin/* Blueprint，session 鉴权）、`web.py`（/admin/* 页面路由）；页面模板在 `templates/admin/`（Bootstrap CDN + 原生 fetch，数据全部走管理 API，含「设置」页管理运行时配置）
 - `monitoring/`：`checks.py`（检测项+两套状态机）、`alerts.py`（邮件 HTML+发送）、`scheduler.py`（检测循环+时段窗口）
 - `scheduling.py`：三个 daemon 线程统一入口 `start_all()`
@@ -32,7 +32,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 
 ## 架构与运行关键点
 
-- `app.py` 路由：`/api/proxy`、`/api/generate-sign`（需 Bearer token）、`/api/live.m3u8`、`/api/live.xml`、`/api/live.xml.gz`、`/health`、`/api/admin/*`（管理 API，session 鉴权，`ADMIN_PASSWORD` 空则整体 403）、`/admin/*`（管理页面，未登录 302 跳登录页）
+- `app.py` 路由：`/api/proxy`、`/api/generate-sign`（需 Bearer token）、`/api/live.m3u8`、`/api/live.xml`、`/api/live.xml.gz`、`/health`、`/api/music/*`（歌单列表/详情/搜索/播放地址/歌词 + 歌单增删，POST/DELETE 需 Bearer token）、`/api/admin/*`（管理 API，session 鉴权，`ADMIN_PASSWORD` 空则整体 403）、`/admin/*`（管理页面，未登录 302 跳登录页）
 - **调度线程在导入时启动**：`main.py` 模块顶层调 `start_all()`，gunicorn 导入 `main:app` 即触发。因此 **`GUNICORN_WORKERS` 必须为 1**（`gunicorn.conf.py` 默认已是 1），否则 XML 更新/聚合刷新/健康检测重复执行、告警邮件重复轰炸
 - **`gunicorn.conf.py` 不要开 `preload_app`**：preload 会在 master fork worker 时复制 daemon 线程，导致 worker 锁死（120s 超时被 SIGKILL，健康检测全超时）——踩过的坑，见 commit fd5d9ca
 - 三个后台 daemon 线程（`scheduling.py:start_all`）：XML 每日更新（每天 GMT+8 02:30 刷 EPG）、聚合刷新（**双频率**：公开源每 6h + 官方源每 3h）、健康监控（常规 10 分钟一轮 + 流探测 30 分钟一轮，状态翻转才发邮件）
@@ -45,6 +45,7 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 - `aggregated.m3u`：多源聚合结果（hntv 官方 + 3 个公开源）；`/api/live.m3u8` 读它，无缓存才触发首次生成。**官方源每 3h 刷新（签名有效期约 4h），公开源每 6h 刷新（含探测过滤）**
 - `public_channels.json`：公开源过滤+探测后的频道缓存（官方 1h 刷新时复用，避免频繁拉公开源）
 - `stream_failures.json`：聚合探测的跨轮失败记录（连续两轮失败才丢弃频道）
+- `music_playlists.json`：音乐动态歌单（POST /api/music/playlists 写入，与 config.MUSIC_PLAYLISTS 静态配置合并去重）
 - **改了聚合/过滤逻辑后，手动删除 `xml_data/aggregated.m3u`（和 `stream_failures.json`）再重启**，否则旧结果一直生效
 
 ## 聚合逻辑（core/sources.py + core/aggregator.py）
@@ -67,6 +68,13 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 - 日志体系：三路输出（stdout / `xml_data/app.log` 滚动 10MB×3 / SQLite logs 表）；**logs 表默认仅 WARNING+**，
   INFO 级为白名单关键事件（`admin/db.py:record_event`：服务启停/聚合完成/告警结果/EPG 更新/管理操作审计）；
   异常用 `logger.exception`（自带堆栈入库）；数据层失败日志经 SqliteHandler 回写有防递归守卫（`_down_until` 冷却）
+
+## 音乐接入（core/music.py）
+
+- 上游是用户自建 ge-whale-music 网易云接口（`MUSIC_API_BASE`，默认 `http://60.204.147.98:15001`），只做**元数据转发**：搜索/歌单详情/单曲详情/播放地址/歌词。播放地址是网易 CDN 直链（带时效签名），由客户端播放器直连，**不写流反代、不占本服务带宽**
+- 字段以实测为准（与 ge-whale-music 文档示例有出入）：歌曲对象封面是 `pic_url`、`duration` 是**秒**（float）；歌单对象封面是 `coverImgUrl`、`music_id` 为数字
+- 歌单管理：静态 `config.MUSIC_PLAYLISTS` + 动态 `music_playlists.json` 合并去重（动态优先），POST/DELETE `/api/music/playlists`（需 Bearer token）管理动态歌单，app 端（mytv-android 音乐模块）只认 `/api/music/*`
+- 上游自带 redis 缓存与 100 次/分钟/IP 限流，本层不加缓存直接透传；上游非 200 code 原样透传（调用方转 502 带原因）
 
 ## 已知坑
 

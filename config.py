@@ -150,6 +150,19 @@ GROUP_ORDER = {HNTV_GROUP_NAME: 0, "央视": 1, "卫视": 2, BILIBILI_GROUP_NAME
 # 正式使用设 BILIBILI_ONLY_MODE=false 恢复完整聚合）
 BILIBILI_ONLY_MODE = os.environ.get('BILIBILI_ONLY_MODE', 'true').lower() == 'true'
 
+# ---------------------------------------------------------------- 音乐
+# ge-whale-music 网易云接口服务地址（自建服务，负责搜索/歌单/播放地址/歌词）。
+# 生产通过 IP 访问：域名可能失效，默认走 http://60.204.147.98:15001
+MUSIC_API_BASE = os.environ.get('MUSIC_API_BASE', 'http://60.204.147.98:15001').rstrip('/')
+# 请求上游超时（秒）
+MUSIC_REQUEST_TIMEOUT = 15
+
+# 默认内置歌单（[{id, name}]；运行时可用管理 API 动态增删，存 music_playlists.json，
+# 两处合并去重，与 B 站房间的"静态配置+动态 json"模式一致）
+MUSIC_PLAYLISTS = []
+# 运行时动态歌单列表文件（POST /api/music/playlists 写入，重启不丢）
+MUSIC_PLAYLISTS_PATH = os.path.join(XML_DATA_DIR, 'music_playlists.json')
+
 # ---------------------------------------------------------------- 管理后台
 # 管理界面/管理 API 的登录密码（session 鉴权；留空 = 禁用管理功能，安全默认）
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '').strip()
