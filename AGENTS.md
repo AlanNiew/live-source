@@ -36,15 +36,15 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 - `app.py` 路由：`/api/proxy`、`/api/generate-sign`（需 Bearer token）、`/api/live.m3u8`、`/api/live.xml`、`/api/live.xml.gz`、`/health`、`/api/bilibili/*`（`<room_id>/live.m3u8` 代理主清单、`<room_id>/seg/<path>` 分片反代、`<room_id>/status` 开播状态、`rooms` GET 列全部/POST 添加、`rooms/<room_id>` DELETE 删除，写操作需 Bearer token）、`/api/music/*`（歌单列表/详情/搜索/播放地址/歌词 + 歌单增删，POST/DELETE 需 Bearer token）、`/api/admin/*`（管理 API，session 鉴权，`ADMIN_PASSWORD` 空则整体 403）、`/admin/*`（管理页面，未登录 302 跳登录页）
 - **调度线程在导入时启动**：`main.py` 模块顶层调 `start_all()`，gunicorn 导入 `main:app` 即触发。因此 **`GUNICORN_WORKERS` 必须为 1**（`gunicorn.conf.py` 默认已是 1），否则 XML 更新/聚合刷新/健康检测重复执行、告警邮件重复轰炸
 - **`gunicorn.conf.py` 不要开 `preload_app`**：preload 会在 master fork worker 时复制 daemon 线程，导致 worker 锁死（120s 超时被 SIGKILL，健康检测全超时）——踩过的坑，见 commit fd5d9ca
-- 三个后台 daemon 线程（`scheduling.py:start_all`）：XML 每日更新（每天 GMT+8 02:30 刷 EPG）、聚合刷新（**双频率**：公开源每 6h + 官方源每 3h）、健康监控（常规 10 分钟一轮 + 流探测 30 分钟一轮，状态翻转才发邮件）
+- 三个后台 daemon 线程（`scheduling.py:start_all`）：XML 每日更新（每天 GMT+8 02:30 刷 EPG）、聚合刷新（**双频率**：公开源每 6h + 官方源每 2h）、健康监控（常规 10 分钟一轮 + 流探测 30 分钟一轮，状态翻转才发邮件）
 
 ## 磁盘缓存（改逻辑后必须清缓存验证）
 
 `xml_data/` 目录，全部 `os.makedirs(... exist_ok=True)` 自动创建：
 
 - `live.xml` / `live.xml.gz`：EPG 数据，**每天仅 02:30 刷新一次**。`/api/live.xml` 直接读缓存文件（优先 gz）；`/api/live.xml.gz` 文件不存在才现场生成
-- `aggregated.m3u`：多源聚合结果（hntv 官方 + 3 个公开源）；`/api/live.m3u8` 读它，无缓存才触发首次生成。**官方源每 3h 刷新（签名有效期约 4h），公开源每 6h 刷新（含探测过滤）**
-- `public_channels.json`：公开源过滤+探测后的频道缓存（官方 1h 刷新时复用，避免频繁拉公开源）
+- `aggregated.m3u`：多源聚合结果（hntv 官方 + 3 个公开源）；`/api/live.m3u8` 读它，无缓存才触发首次生成。**官方源每 2h 刷新（签名有效期约 4h），公开源每 6h 刷新（含探测过滤）**
+- `public_channels.json`：公开源过滤+探测后的频道缓存（官方源刷新（2h）时复用，避免频繁拉公开源）
 - `stream_failures.json`：聚合探测的跨轮失败记录（连续两轮失败才丢弃频道）
 - `bilibili_rooms.json`：B 站 uid→room_id 的解析结果磁盘缓存（**不是**频道列表；流地址签名约 4h 过期，内存另有 30 分钟 TTL）
 - `bilibili_custom_rooms.json`：运行时动态添加的 B 站频道（POST/DELETE `/api/bilibili/rooms` 写入，重启不丢；**与上面的解析缓存语义不同，勿混用**）
@@ -95,4 +95,4 @@ HNTV（河南电视台）直播 API 服务：Flask 封装 HNTV 官方接口 + �
 - `git status` 显示 `xml_data/` 未跟踪：`.gitignore` 已排除 `.env`、`__pycache__/`、`*.pyc`、`/.idea/`，**不要把缓存与密钥提交**
 - 容器内无 `.env` 文件是正常的（`.dockerignore` 排除 + `--env-file` 注入），进容器排查用 `env | cut -d= -f1` 看键名
 - `BILIBILI_ONLY_MODE` **默认 true（B 站测试模式）**：聚合跳过 hntv 官方源与公开源、只出 B 站频道，且监控阈值自动降到 1。**正式使用必须显式设 `BILIBILI_ONLY_MODE=false`**，否则列表只有 1-2 个 B 站频道（排查「频道怎么只剩几个」先看它）
-- `api_usage.md` 与 README 部分过时（如端口、workers 数、旧文件名），以代码为准；B 站/音乐以 `BILIBILI_LIVE.md`、`BILIBILI_ROOMS_API.md`、AGENTS.md 为准
+- `api_usage.md`（调用方端点参考）与 README 已按当前代码同步；如再出现冲突，以代码为准。B 站/音乐/自定义流细节以 `BILIBILI_LIVE.md`、`BILIBILI_ROOMS_API.md`、`DOUYIN_LIVE.md`、本文件为准

@@ -5,13 +5,15 @@
 ## 功能特性
 
 - **HNTV 官方接口封装**：带签名鉴权（`timestamp` + `sign`）的直播列表 / EPG 数据代理
-- **多源 m3u 聚合**：HNTV 官方 + 3 个公开源（iptv-org / hujingguang / wwb521），按地址质量择优去重，分组输出（河南卫视 → 央视 → 卫视）
+- **多源 m3u 聚合**：HNTV 官方 + 3 个公开源（iptv-org / hujingguang / wwb521），按地址质量择优去重，分组输出（河南卫视 → 央视 → 卫视 → 自定义 → B站直播）
+- **自定义流频道**：`sources` 表 `type=custom`，把外部工具转流地址（如抖音经 streamlink/ffmpeg 转出的本地 HLS）以稳定地址并入聚合，不参与探测（见 [DOUYIN_LIVE.md](DOUYIN_LIVE.md)）
+- **管理后台**：`/admin/*` 管理直播源、频道覆盖、监控、日志与运行时设置（session 鉴权，`ADMIN_PASSWORD` 为空则管理功能整体禁用）
 - **B 站直播接入**：配置 `BILIBILI_ROOMS` 的 UP 主 uid，开播判定后以代理地址加入列表（B 站 CDN 防盗链校验 Referer，播放器直连 403，必须经本服务 m3u8 重写 + 分片反代）
 - **网易云音乐接入**：代理自建 ge-whale-music 接口（搜索/歌单/播放地址/歌词），歌单支持静态配置 + API 动态增删；只转发元数据，播放地址是网易 CDN 直链由客户端直连（不占本服务带宽）
 - **可达性探测过滤**：聚合时对公开源频道做探测，连续两轮不可达才丢弃，保证列表里都是可用源
 - **EPG 节目单**：每日自动生成 XML / gzip 压缩版，供播放器回看/节目信息
 - **健康监控告警**：定期检测服务存活/频道数/EPG/流地址可达性，异常时邮件告警（状态翻转才发，不轰炸）
-- **定时任务**：EPG 每日 02:30（GMT+8）刷新、聚合每 6 小时刷新、健康检测 10 分钟一轮
+- **定时任务**：EPG 每日 02:30（GMT+8）刷新；聚合双频率刷新（公开源 6h / 官方源 2h）；健康检测 10 分钟一轮 + 流探测 30 分钟一轮
 
 ## 项目结构
 
@@ -23,21 +25,30 @@
 ├── scheduling.py         # 三个 daemon 线程统一入口 start_all()
 ├── core/                 # 业务核心（零 Flask 依赖）
 │   ├── hntv_client.py    # HNTV 官方 API 鉴权与请求
-│   ├── bilibili.py      # B 站直播：房间解析/流解析/m3u8 重写/分片反代
+│   ├── bilibili.py       # B 站直播：房间解析/流解析/m3u8 重写/分片反代
+│   ├── music.py          # ge-whale-music 网易云接口代理（元数据转发/歌单管理）
 │   ├── epg.py            # EPG XML 生成/读取/时间格式化
 │   ├── sources.py        # 公开源拉取/解析/评分/过滤中文化
-│   ├── aggregator.py     # 聚合编排/探测过滤/缓存/降级
-│   └── probing.py        # 流地址可达性探测（单实现，严格/宽松口径）
+│   ├── aggregator.py     # 聚合编排/探测过滤/缓存/降级 + B站/自定义流合并
+│   ├── probing.py        # 流地址可达性探测（单实现，严格/宽松口径）
+│   ├── atomic_io.py      # 原子写（临时文件 + os.replace）
+│   └── logger.py         # 统一日志（stdout/滚动文件/SQLite）
+├── admin/                # 管理后台：db.py 数据层 / api.py 管理 API / web.py 页面路由
 ├── monitoring/           # 健康监控与告警
 │   ├── checks.py         # 检测项 + 两套状态机（常规/流探测）
 │   ├── alerts.py         # 邮件 HTML 构建与发送
 │   └── scheduler.py      # 检测循环 + 时段窗口（GMT+8 8:00-24:00）
+├── scripts/              # 运维脚本（seed_admin_settings / add_bili_room / test_email …）
 ├── email/                # 邮件发送模块（send_assistant.py）
-├── templates/            # 邮件告警 HTML 模板
+├── templates/            # 邮件告警 HTML 模板 + 管理后台页面（templates/admin/）
 ├── docker/               # Docker 构建与部署脚本
 ├── tests/                # unittest 测试（标准库，无外部依赖）
 └── xml_data/             # 磁盘缓存（运行时自动生成，勿提交）
 ```
+
+文档：`AGENTS.md`（开发与架构要点）、`ADMIN_PLAN.md`（管理后台契约）、
+`BILIBILI_LIVE.md` / `BILIBILI_ROOMS_API.md`（B 站接入）、`DOUYIN_LIVE.md`（抖音/自定义流）、
+`api_usage.md`（调用方端点参考）。
 
 ## 技术栈
 
@@ -53,9 +64,13 @@
 ```bash
 API_TOKEN=你的API令牌
 HNTV_SECRET_KEY=你的签名密钥
+ADMIN_PASSWORD=管理后台登录密码     # 留空 = 管理功能整体禁用
 email=你的邮箱（用于接收告警）
 password=邮箱授权码（QQ/163 在邮箱设置中获取）
 ```
+
+可选键：`BILIBILI_COOKIE`（B 站高清）、`BILIBILI_ONLY_MODE`、`BILIBILI_DIRECT_SEGMENTS`、
+`PUBLIC_BASE_URL`、`MUSIC_API_BASE`（完整说明见 AGENTS.md「环境变量」）。
 
 **`.env` 格式要求**：`KEY=VALUE` —— 键名后无空格、值不带引号、无行内注释，否则 docker `--env-file` 解析失败或值带引号导致 SMTP 认证失败。
 
@@ -148,12 +163,18 @@ gunicorn -c gunicorn.conf.py main:app
 | `POST /api/bilibili/rooms` | Bearer token | 动态添加 B 站频道 |
 | `DELETE /api/bilibili/rooms/<room_id>` | Bearer token | 删除动态添加的 B 站频道 |
 | `GET /api/music/playlists` | 无 | 歌单列表（静态配置 + 动态歌单合并去重） |
-| `GET /api/music/playlist` | 无 | 歌单详情（`?id=<playlist_id>`，分页） |
-| `GET /api/music/search` | 无 | 网易云搜索（`?keywords=&limit=`） |
-| `GET /api/music/play` | 无 | 播放地址（`?id=<music_id>[&level=]`，返回网易 CDN 直链） |
-| `GET /api/music/lyrics` | 无 | 歌词（`?id=<music_id>`） |
-| `POST /api/music/playlists` | Bearer token | 添加动态歌单 |
+| `GET /api/music/playlist` | 无 | 歌单详情（`?id=&pageNum=&pageSize=`，分页） |
+| `GET /api/music/search` | 无 | 网易云搜索（`?keyword=&limit=`，默认 10、上限 50） |
+| `GET /api/music/play` | 无 | 播放地址（`?id=&level=`，默认 `exhigh`，返回网易 CDN 直链） |
+| `GET /api/music/lyrics` | 无 | 歌词（`?id=`） |
+| `POST /api/music/playlists` | Bearer token | 添加动态歌单（body `{"id":"歌单ID","name":"可选"}`） |
 | `DELETE /api/music/playlists/<playlist_id>` | Bearer token | 删除动态歌单 |
+| `GET/POST /api/admin/*` | session | 管理 API（源/频道/监控/日志/设置；登录 `POST /api/admin/login`） |
+| `GET /admin/*` | session | 管理页面（仪表盘/源管理/频道管理/监控/日志/设置） |
+
+直播源类型有三种：`public`（公开 m3u 地址）、`bilibili`（房间号）、`custom`（自定义流，
+外部转流工具的 HLS 地址，见 [DOUYIN_LIVE.md](DOUYIN_LIVE.md)）。调用方完整端点说明见
+[api_usage.md](api_usage.md)。
 
 ## 测试
 
@@ -168,7 +189,7 @@ python -m unittest discover -s tests -t .
 ## 架构要点
 
 - **调度线程在导入时启动**（`main.py` 顶层调 `scheduling.start_all()`），因此 **`GUNICORN_WORKERS` 必须为 1**，且 **`gunicorn.conf.py` 不要开 `preload_app`**（会复制 daemon 线程导致 worker 卡死）
-- **磁盘缓存**（`xml_data/`）：`live.xml(.gz)` 每天 02:30 刷新、`aggregated.m3u` 每 6h 刷新、`stream_failures.json` 探测失败跨轮记录。改动聚合逻辑后删除 `aggregated.m3u` 再重启验证
+- **磁盘缓存**（`xml_data/`）：`live.xml(.gz)` 每天 02:30 刷新、`aggregated.m3u` 双频率刷新（公开源 6h / 官方源 2h）、`stream_failures.json` 探测失败跨轮记录。改动聚合逻辑后删除 `aggregated.m3u` 再重启验证
 - **监控告警**：常规检测 10 分钟一轮 + 流探测 30 分钟一轮，仅 GMT+8 8:00-24:00 执行；分组分级阈值（河南卫视 90% / 央视 80% / 卫视 20%），卫视不达标仅日志展示；状态翻转才发邮件
 - **所有时间按 GMT+8** 处理，不依赖容器时区
 - **B 站 / 音乐细节**：B 站实现与坑见 `BILIBILI_LIVE.md`，房间管理 API 见 `BILIBILI_ROOMS_API.md`；音乐（ge-whale-music 字段/歌单合并规则）见 AGENTS.md「音乐接入」
@@ -179,4 +200,5 @@ python -m unittest discover -s tests -t .
 - 项目内 `email/` 目录与标准库 `email` 同名冲突，新代码请勿 `import email`
 - 免费公开卫视源可达率天然较低（约 20-40%），聚合已做探测过滤与分组排序优化；央视与河南卫视官方源保持稳定
 - **B 站直播**：接口非官方可能随时改版；未开播房间 `playUrl` 也会返回地址，以实测拉取 m3u8 主清单 200 判定在播；`PUBLIC_BASE_URL` 环境变量需指向播放器可达的地址（容器部署必须覆盖为宿主机映射地址），否则列表里的 B 站频道对播放器不可用
+- **自定义流**：`sources` 表 `type=custom` 的地址不参与可达性探测，由外部转流工具（streamlink/ffmpeg 等）保证可用；转流进程需自行守护（systemd/nssm），本服务只消费其 HLS 地址，见 [DOUYIN_LIVE.md](DOUYIN_LIVE.md)
 - **B 站测试模式**：`BILIBILI_ONLY_MODE` 默认 `true`（聚合跳过官方/公开源、只出 B 站频道，监控频道数阈值自动降到 1）；正式使用必须显式设 `BILIBILI_ONLY_MODE=false`
